@@ -22,6 +22,7 @@
 #include "grid_piano_mode.h"
 #include "auto_chord_mode.h"
 #include "lfo_mode.h"
+#include "synth_sequencer_mode.h"
 #include "ui_elements.h"
 #include "midi_utils.h"
 
@@ -78,10 +79,11 @@ AppIcon apps[] = {
   {"ARP", "↗", 0xF81F, ARPEGGIATOR},   // Magenta
   {"GRID", "▣", 0x07FF, GRID_PIANO},   // Cyan
   {"CHORD", "⚘", 0xFBE0, AUTO_CHORD},  // Light Orange
-  {"LFO", "", 0xAFE5, LFO}             // Light Green
+  {"LFO", "", 0xAFE5, LFO},            // Light Green
+  {"SYNTH", "♬", 0xC800, SYNTH_SEQUENCER}  // Blood Red
 };
 
-int numApps = 10;
+int numApps = 11;
 
 class MIDICallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
@@ -163,7 +165,8 @@ void setup() {
   initializeGridPianoMode();
   initializeAutoChordMode();
   initializeLFOMode();
-  
+  initializeSynthSequencerMode();
+
   drawMenu();
   updateStatus();
   Serial.println("MIDI Controller ready!");
@@ -205,6 +208,9 @@ void loop() {
       break;
     case LFO:
       handleLFOMode();
+      break;
+    case SYNTH_SEQUENCER:
+      handleSynthSequencerMode();
       break;
   }
   
@@ -376,21 +382,47 @@ void drawAppGraphics(AppMode mode, int x, int y, int iconSize) {
       {
         int centerX = x + iconSize/2;
         int centerY = y + iconSize/2;
-        
+
         // Draw sine wave as connected line segments
         int lastX = centerX - 15;
         int lastY = centerY;
-        
+
         for (int i = 1; i <= 15; i++) {
           int px = centerX - 15 + i * 2;
           float angle = (i * 3.14159) / 4.0; // One and a half cycles
           int py = centerY + (int)(6 * sin(angle));
-          
+
           // Draw line from last point to current point
           tft.drawLine(lastX, lastY, px, py, THEME_BG);
-          
+
           lastX = px;
           lastY = py;
+        }
+      }
+      break;
+    case SYNTH_SEQUENCER: // SYNTH - waveform and sequencer grid
+      {
+        int centerX = x + iconSize/2;
+        int centerY = y + iconSize/2;
+
+        // Draw waveform (sawtooth)
+        int lastX = centerX - 12;
+        int lastY = centerY - 6;
+
+        for (int i = 0; i < 3; i++) {
+          int x1 = centerX - 12 + i * 8;
+          int x2 = centerX - 12 + (i + 1) * 8;
+          tft.drawLine(x1, centerY - 6, x2, centerY + 6, THEME_BG);
+          if (i < 2) {
+            tft.drawLine(x2, centerY + 6, x2, centerY - 6, THEME_BG);
+          }
+        }
+
+        // Draw step indicators below
+        for (int i = 0; i < 6; i++) {
+          int stepX = centerX - 10 + i * 4;
+          int stepH = (i % 2 == 0) ? 3 : 2;
+          tft.fillRect(stepX, centerY + 10, 2, stepH, THEME_BG);
         }
       }
       break;
@@ -449,6 +481,9 @@ void enterMode(AppMode mode) {
       break;
     case LFO:
       drawLFOMode();
+      break;
+    case SYNTH_SEQUENCER:
+      drawSynthSequencerMode();
       break;
   }
   updateStatus();
