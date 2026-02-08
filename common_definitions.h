@@ -5,17 +5,18 @@
 #include <XPT2046_Touchscreen.h>
 #include <BLEDevice.h>
 
-// Color scheme
-#define THEME_BG         0x0841
-#define THEME_SURFACE    0x2945
-#define THEME_PRIMARY    0x06FF
-#define THEME_SECONDARY  0xFD20
-#define THEME_ACCENT     0x07FF
-#define THEME_SUCCESS    0x07E0
-#define THEME_WARNING    0xFFE0
-#define THEME_ERROR      0xF800
-#define THEME_TEXT       0xFFFF
-#define THEME_TEXT_DIM   0x8410
+// Color scheme - ZOMBIE SS Theme (Black/Red/White)
+#define THEME_BG         0x0000  // Pure Black
+#define THEME_SURFACE    0x1082  // Dark gray
+#define THEME_PRIMARY    0xF800  // Pure Red
+#define THEME_SECONDARY  0xC000  // Dark Red
+#define THEME_ACCENT     0xFFFF  // Pure White
+#define THEME_SUCCESS    0x07E0  // Green
+#define THEME_WARNING    0xFFE0  // Yellow
+#define THEME_ERROR      0xF800  // Red
+#define THEME_TEXT       0xF800  // Red text
+#define THEME_TEXT_DIM   0x8800  // Dim Red
+#define THEME_OUTLINE    0xFFFF  // White outlines
 
 // BLE MIDI UUIDs
 #define SERVICE_UUID        "03b80e5a-ede8-4b33-a751-6ce34ec4c700"
@@ -42,7 +43,10 @@ enum AppMode {
   ARPEGGIATOR,
   GRID_PIANO,
   AUTO_CHORD,
-  LFO
+  LFO,
+  ZOMBIE_SYNTH,
+  ZOMBIE_ARP,
+  ZOMBIE_SEQ
 };
 
 // Music theory
