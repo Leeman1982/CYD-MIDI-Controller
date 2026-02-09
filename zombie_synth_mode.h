@@ -476,12 +476,7 @@ void zombieSynthHandleTouch() {
 
 void zombieSynthUpdate() {
   // Audio processing happens in separate task
-  // Just update voice count display periodically
-  static unsigned long lastUpdate = 0;
-  if (millis() - lastUpdate > 100) {
-    lastUpdate = millis();
-    synthParams.needsRedraw = true;
-  }
+  // No need to force redraws - let user interactions trigger updates
 }
 
 SynthEngine* getZombieSynth() {
