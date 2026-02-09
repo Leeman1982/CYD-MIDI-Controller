@@ -7,9 +7,10 @@
 #include <USBMIDI.h>
 
 // MIDI input handling for both USB and 5-pin DIN
-// 5-pin DIN MIDI uses GPIO 16 (RX2)
+// 5-pin DIN MIDI uses GPIO 35 (input-only, perfect for MIDI RX)
+// Note: GPIO 16 is RGB LED green, cannot be used
 
-#define MIDI_SERIAL_RX 16  // 5-pin DIN MIDI input
+#define MIDI_SERIAL_RX 35  // 5-pin DIN MIDI input (input-only pin)
 #define MIDI_BAUD_RATE 31250
 
 class MIDIInput {

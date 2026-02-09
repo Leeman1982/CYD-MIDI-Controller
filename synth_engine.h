@@ -14,10 +14,12 @@
 #define MIDI_NOTE_COUNT 128
 
 // Audio output configuration for PCM5052 DAC
+// Note: If using onboard speaker (P4 connector), GPIO26 controls SC8002B amp
+// For external I2S DAC, use these free GPIOs:
 #define I2S_NUM I2S_NUM_0
-#define I2S_BCK_PIN 26      // Bit clock
-#define I2S_WS_PIN 27       // Word select (LRCLK)
-#define I2S_DATA_PIN 22     // Data out
+#define I2S_BCK_PIN 22      // Bit clock (CN1 connector)
+#define I2S_WS_PIN 27       // Word select/LRCLK (CN1 connector)
+#define I2S_DATA_PIN 17     // Data out (requires RGB LED removal or can cause conflicts)
 
 // Waveform types
 enum WaveformType {

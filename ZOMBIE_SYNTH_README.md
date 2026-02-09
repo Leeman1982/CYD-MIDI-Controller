@@ -56,19 +56,21 @@ A fully-featured Prophet-8 inspired polyphonic synthesizer for the ESP32 Cheap Y
 
 ### MIDI Input
 - **USB MIDI** via ESP32 native USB
-- **5-pin DIN MIDI** via hardware serial (GPIO 16)
+- **5-pin DIN MIDI** via hardware serial (GPIO 35 - input only, perfect for RX)
 - **Full MIDI implementation:**
   - Note On/Off
   - Control Change (CC74: Filter Cutoff, CC71: Resonance, CC7: Volume)
   - Pitch Bend (ready for implementation)
 
 ### Audio Output
-- **I2S audio output** configured for PCM5052 DAC
+- **I2S audio output** configured for external PCM5052 DAC
 - **44.1 kHz sample rate**, 16-bit stereo
-- **GPIO pin assignment:**
-  - GPIO 26: Bit Clock (BCLK)
-  - GPIO 27: Word Select (LRCLK/WS)
-  - GPIO 22: Data Output (DOUT)
+- **GPIO pin assignment (verified for CYD ESP32-2432S028R):**
+  - GPIO 22: Bit Clock (BCLK) - via CN1 connector
+  - GPIO 27: Word Select (LRCLK/WS) - via CN1 connector
+  - GPIO 17: Data Output (DOUT) - requires RGB LED removal or conflicts
+
+**Note:** The onboard P4 speaker connector uses GPIO 26 for the SC8002B amplifier. For external I2S DAC, use the pins above.
 
 ### User Interface
 - **ZOMBIE SS themed UI:**
@@ -93,16 +95,23 @@ A fully-featured Prophet-8 inspired polyphonic synthesizer for the ESP32 Cheap Y
 - **Touch:** XPT2046 resistive touchscreen
 - **Processor:** Dual-core ESP32 @ 240MHz
 
-### Audio DAC (Optional but Recommended)
-- **PCM5052** or compatible I2S DAC
-- Connect to GPIOs 26, 27, 22 as specified above
-- Alternative: Built-in ESP32 DAC (lower quality)
+### Audio DAC (Required for Sound Output)
+- **External I2S DAC** like PCM5102A or MAX98357A
+- Connect via CN1 expansion connector:
+  - GPIO 22 → BCLK
+  - GPIO 27 → LRCLK/WS
+  - GPIO 17 → DIN (may require RGB LED removal)
+- **Important:** GPIO 26 is used by onboard speaker amp, don't use for I2S!
+- Alternative options:
+  - Use onboard speaker (P4 connector with SC8002B amp on GPIO 26)
+  - Remove RGB LED to free GPIO 4, 16, 17 for more flexibility
 
 ### MIDI Input
-- **5-pin DIN MIDI:** Requires optocoupler circuit on GPIO 16
-  - Standard MIDI input circuit with 6N138 or similar
-  - Connect MIDI RX to GPIO 16 via optocoupler
-- **USB MIDI:** Works natively via USB port
+- **5-pin DIN MIDI:** Requires optocoupler circuit on GPIO 35
+  - Standard MIDI input circuit with 6N138 or similar optocoupler
+  - Connect MIDI RX to GPIO 35 (input-only pin, perfect for MIDI)
+  - **Do NOT use GPIO 16** - it's connected to RGB LED (green)
+- **USB MIDI:** Works natively via USB port (no extra hardware needed)
 
 ## Software Requirements
 
