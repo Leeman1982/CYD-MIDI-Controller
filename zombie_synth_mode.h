@@ -18,8 +18,6 @@ struct ZombieSynthParams {
   // Oscillator 2
   int osc2Wave;
   float osc2Level;
-  float osc2Detune;
-  int osc2Semitones;
 
   // Filter
   int filterType;
@@ -43,7 +41,9 @@ struct ZombieSynthParams {
   float masterVolume;
 
   // UI state
-  int currentPage;  // 0=OSC, 1=FILTER, 2=AMP ENV, 3=FILTER ENV
+  int currentPage;
+  bool needsRedraw;
+  int activeSlider;  // -1 = none, 0-7 = slider index
 };
 
 static ZombieSynthParams synthParams;
@@ -57,13 +57,10 @@ void zombieSynthInit() {
     zombieSynth->init();
   }
 
-  // Initialize parameters
   synthParams.osc1Wave = WAVE_SAW;
   synthParams.osc1Level = 0.5f;
   synthParams.osc2Wave = WAVE_SAW;
   synthParams.osc2Level = 0.5f;
-  synthParams.osc2Detune = 0.005f;
-  synthParams.osc2Semitones = 0;
 
   synthParams.filterType = FILTER_LOWPASS;
   synthParams.filterCutoff = 0.8f;
@@ -82,8 +79,10 @@ void zombieSynthInit() {
 
   synthParams.masterVolume = 0.7f;
   synthParams.currentPage = 0;
+  synthParams.needsRedraw = true;
+  synthParams.activeSlider = -1;
 
-  // Apply initial settings
+  // Apply settings
   zombieSynth->setOsc1Waveform((WaveformType)synthParams.osc1Wave);
   zombieSynth->setOsc2Waveform((WaveformType)synthParams.osc2Wave);
   zombieSynth->setFilterType((FilterType)synthParams.filterType);
@@ -99,66 +98,82 @@ void zombieSynthInit() {
 }
 
 void drawZombieHeader() {
-  // ZOMBIE SS header with German WW2 style font (angular, bold)
+  // ZOMBIE SS header - bold angular style
   tft.fillRect(0, 0, 320, 50, THEME_BG);
+  tft.fillRect(2, 2, 316, 46, THEME_BG);
   tft.drawRect(0, 0, 320, 50, THEME_OUTLINE);
   tft.drawRect(1, 1, 318, 48, THEME_OUTLINE);
 
+  // ZOMBIE SS in large bold font
   tft.setTextColor(THEME_PRIMARY, THEME_BG);
-  tft.setTextSize(2);
-  tft.drawCentreString("ZOMBIE SS", 160, 10, 4);
+  tft.drawString("ZOMBIE SS", 95, 8, 6);  // Font 6 = large 48px
 
+  // PROPHET SYNTH subtitle
   tft.setTextColor(THEME_ACCENT, THEME_BG);
-  tft.setTextSize(1);
-  tft.drawCentreString("PROPHET SYNTH", 160, 32, 2);
+  tft.drawString("PROPHET SYNTH", 90, 35, 2);
+
+  // BACK button - top left
+  tft.fillRoundRect(5, 5, 55, 20, 4, THEME_PRIMARY);
+  tft.drawRoundRect(5, 5, 55, 20, 4, THEME_OUTLINE);
+  tft.setTextColor(THEME_BG, THEME_PRIMARY);
+  tft.drawString("BACK", 15, 8, 2);
 
   // Page indicators
   const char* pageNames[] = {"OSC", "FLTR", "AMP", "F.ENV"};
   for (int i = 0; i < 4; i++) {
-    int x = 20 + i * 70;
+    int x = 10 + i * 75;
     uint16_t color = (i == synthParams.currentPage) ? THEME_PRIMARY : THEME_TEXT_DIM;
-    tft.fillRoundRect(x, 55, 60, 20, 4, THEME_BG);
-    tft.drawRoundRect(x, 55, 60, 20, 4, color);
-    tft.setTextColor(color, THEME_BG);
-    tft.drawCentreString(pageNames[i], x + 30, 59, 2);
+    uint16_t bgColor = (i == synthParams.currentPage) ? THEME_PRIMARY : THEME_BG;
+    uint16_t txtColor = (i == synthParams.currentPage) ? THEME_BG : color;
+
+    tft.fillRoundRect(x, 55, 70, 22, 4, bgColor);
+    tft.drawRoundRect(x, 55, 70, 22, 4, THEME_OUTLINE);
+    tft.setTextColor(txtColor, bgColor);
+    tft.drawCentreString(pageNames[i], x + 35, 60, 2);
   }
 
-  // Voice count
+  // Voice count - right side
   if (zombieSynth) {
     int voices = zombieSynth->getActiveVoiceCount();
-    tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
     char buf[20];
-    sprintf(buf, "VOICES:%d", voices);
-    tft.drawString(buf, 230, 80, 2);
+    sprintf(buf, "%d/8", voices);
+    tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
+    tft.drawRightString(buf, 315, 60, 2);
   }
 }
 
-void drawSlider(int x, int y, int w, int h, const char* label, float value, const char* valueText = NULL) {
-  // Draw slider with ZOMBIE theme
+void drawVerticalSlider(int x, int y, int w, int h, const char* label, float value, const char* valueText = NULL) {
+  // Slider background
   tft.fillRoundRect(x, y, w, h, 4, THEME_BG);
   tft.drawRoundRect(x, y, w, h, 4, THEME_OUTLINE);
 
-  // Label
+  // Label at top
   tft.setTextColor(THEME_PRIMARY, THEME_BG);
   tft.drawCentreString(label, x + w / 2, y + 5, 2);
 
   // Slider track
+  int trackX = x + w / 2 - 8;
   int trackY = y + 25;
+  int trackW = 16;
   int trackH = h - 50;
-  tft.drawRect(x + w / 2 - 10, trackY, 20, trackH, THEME_OUTLINE);
 
-  // Slider fill
+  tft.fillRect(trackX, trackY, trackW, trackH, THEME_BG);
+  tft.drawRect(trackX, trackY, trackW, trackH, THEME_OUTLINE);
+
+  // Fill bar from bottom
   int fillH = (int)(trackH * value);
-  tft.fillRect(x + w / 2 - 9, trackY + trackH - fillH, 18, fillH, THEME_PRIMARY);
+  if (fillH > 0) {
+    tft.fillRect(trackX + 1, trackY + trackH - fillH, trackW - 2, fillH, THEME_PRIMARY);
+  }
 
-  // Value text
+  // Value text at bottom
   tft.setTextColor(THEME_ACCENT, THEME_BG);
   if (valueText) {
-    tft.drawCentreString(valueText, x + w / 2, y + h - 18, 2);
+    tft.drawCentreString(valueText, x + w / 2, y + h - 15, 2);
   } else {
     char buf[10];
     sprintf(buf, "%d", (int)(value * 100));
-    tft.drawCentreString(buf, x + w / 2, y + h - 18, 2);
+    tft.drawCentreString(buf, x + w / 2, y + h - 15, 2);
   }
 }
 
@@ -173,96 +188,90 @@ void drawButton(int x, int y, int w, int h, const char* text, bool selected = fa
 }
 
 void zombieSynthDrawOscPage() {
-  tft.fillRect(0, 95, 320, 145, THEME_BG);
-
   // OSC 1
-  drawSlider(10, 100, 70, 140, "OSC1", synthParams.osc1Level);
-  drawButton(85, 110, 50, 30, waveNames[synthParams.osc1Wave], true);
-  drawButton(85, 145, 50, 30, "<", false);
-  drawButton(85, 180, 50, 30, ">", false);
+  drawVerticalSlider(10, 85, 65, 150, "OSC1", synthParams.osc1Level);
+
+  // OSC1 wave selection
+  drawButton(80, 95, 50, 25, waveNames[synthParams.osc1Wave], true);
+  drawButton(80, 125, 23, 25, "<", false);
+  drawButton(107, 125, 23, 25, ">", false);
 
   // OSC 2
-  drawSlider(150, 100, 70, 140, "OSC2", synthParams.osc2Level);
-  drawButton(225, 110, 50, 30, waveNames[synthParams.osc2Wave], true);
-  drawButton(225, 145, 50, 30, "<", false);
-  drawButton(225, 180, 50, 30, ">", false);
+  drawVerticalSlider(140, 85, 65, 150, "OSC2", synthParams.osc2Level);
+
+  // OSC2 wave selection
+  drawButton(210, 95, 50, 25, waveNames[synthParams.osc2Wave], true);
+  drawButton(210, 125, 23, 25, "<", false);
+  drawButton(237, 125, 23, 25, ">", false);
 
   // Master Volume
-  drawSlider(245, 100, 65, 140, "VOL", synthParams.masterVolume);
+  drawVerticalSlider(265, 85, 50, 150, "VOL", synthParams.masterVolume);
 }
 
 void zombieSynthDrawFilterPage() {
-  tft.fillRect(0, 95, 320, 145, THEME_BG);
-
   // Cutoff
-  drawSlider(10, 100, 70, 140, "CUTOFF", synthParams.filterCutoff);
+  drawVerticalSlider(10, 85, 65, 150, "CUTOFF", synthParams.filterCutoff);
 
   // Resonance
-  drawSlider(85, 100, 70, 140, "RESO", synthParams.filterResonance);
+  drawVerticalSlider(80, 85, 65, 150, "RESO", synthParams.filterResonance);
 
   // Envelope Amount
-  drawSlider(160, 100, 70, 140, "ENV", synthParams.filterEnvAmount);
+  drawVerticalSlider(150, 85, 65, 150, "ENV", synthParams.filterEnvAmount);
 
   // Filter Type
-  drawButton(240, 110, 70, 30, filterNames[synthParams.filterType], true);
-  drawButton(240, 145, 35, 30, "<", false);
-  drawButton(275, 145, 35, 30, ">", false);
+  drawButton(225, 95, 85, 30, filterNames[synthParams.filterType], true);
+  drawButton(225, 130, 40, 25, "<", false);
+  drawButton(270, 130, 40, 25, ">", false);
 
   tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
-  tft.drawCentreString("FILTER TYPE", 275, 185, 2);
+  tft.drawCentreString("TYPE", 267, 165, 2);
 }
 
 void zombieSynthDrawAmpEnvPage() {
-  tft.fillRect(0, 95, 320, 145, THEME_BG);
-
   char buf[20];
 
   // Attack
   sprintf(buf, "%.2fs", synthParams.ampAttack);
-  drawSlider(10, 100, 70, 140, "ATK", synthParams.ampAttack * 2.0f, buf);
+  drawVerticalSlider(10, 85, 70, 150, "ATK", synthParams.ampAttack / 2.0f, buf);
 
   // Decay
   sprintf(buf, "%.2fs", synthParams.ampDecay);
-  drawSlider(85, 100, 70, 140, "DEC", synthParams.ampDecay, buf);
+  drawVerticalSlider(85, 85, 70, 150, "DEC", synthParams.ampDecay, buf);
 
   // Sustain
-  drawSlider(160, 100, 70, 140, "SUS", synthParams.ampSustain);
+  drawVerticalSlider(160, 85, 70, 150, "SUS", synthParams.ampSustain);
 
   // Release
   sprintf(buf, "%.2fs", synthParams.ampRelease);
-  drawSlider(235, 100, 70, 140, "REL", synthParams.ampRelease, buf);
+  drawVerticalSlider(235, 85, 70, 150, "REL", synthParams.ampRelease, buf);
 }
 
 void zombieSynthDrawFilterEnvPage() {
-  tft.fillRect(0, 95, 320, 145, THEME_BG);
-
   char buf[20];
 
   // Attack
   sprintf(buf, "%.2fs", synthParams.filterAttack);
-  drawSlider(10, 100, 70, 140, "ATK", synthParams.filterAttack * 2.0f, buf);
+  drawVerticalSlider(10, 85, 70, 150, "ATK", synthParams.filterAttack / 2.0f, buf);
 
   // Decay
   sprintf(buf, "%.2fs", synthParams.filterDecay);
-  drawSlider(85, 100, 70, 140, "DEC", synthParams.filterDecay, buf);
+  drawVerticalSlider(85, 85, 70, 150, "DEC", synthParams.filterDecay, buf);
 
   // Sustain
-  drawSlider(160, 100, 70, 140, "SUS", synthParams.filterSustain);
+  drawVerticalSlider(160, 85, 70, 150, "SUS", synthParams.filterSustain);
 
   // Release
   sprintf(buf, "%.2fs", synthParams.filterRelease);
-  drawSlider(235, 100, 70, 140, "REL", synthParams.filterRelease, buf);
+  drawVerticalSlider(235, 85, 70, 150, "REL", synthParams.filterRelease, buf);
 }
 
 void zombieSynthDraw() {
-  static int lastPage = -1;
+  if (!synthParams.needsRedraw) return;
 
   drawZombieHeader();
 
-  if (lastPage != synthParams.currentPage) {
-    lastPage = synthParams.currentPage;
-    tft.fillRect(0, 95, 320, 145, THEME_BG);
-  }
+  // Clear content area
+  tft.fillRect(0, 82, 320, 158, THEME_BG);
 
   switch (synthParams.currentPage) {
     case 0: zombieSynthDrawOscPage(); break;
@@ -270,64 +279,208 @@ void zombieSynthDraw() {
     case 2: zombieSynthDrawAmpEnvPage(); break;
     case 3: zombieSynthDrawFilterEnvPage(); break;
   }
+
+  synthParams.needsRedraw = false;
+}
+
+// Handle slider touch with drag
+bool handleSliderTouch(int sliderX, int sliderY, int sliderW, int sliderH, float& value) {
+  if (touch.isPressed && touch.x >= sliderX && touch.x <= sliderX + sliderW &&
+      touch.y >= sliderY && touch.y <= sliderY + sliderH) {
+
+    // Calculate value from Y position
+    int trackY = sliderY + 25;
+    int trackH = sliderH - 50;
+    int relY = touch.y - trackY;
+    value = 1.0f - (float)relY / (float)trackH;
+    value = constrain(value, 0.0f, 1.0f);
+
+    return true;
+  }
+  return false;
 }
 
 void zombieSynthHandleTouch() {
-  if (!touch.justPressed) return;
+  if (!touch.justPressed && !touch.isPressed) return;
 
-  // Check page tabs
-  for (int i = 0; i < 4; i++) {
-    int x = 20 + i * 70;
-    if (isButtonPressed(x, 55, 60, 20)) {
-      synthParams.currentPage = i;
-      return;
+  // BACK button
+  if (touch.justPressed && isButtonPressed(5, 5, 55, 20)) {
+    exitToMenu();
+    return;
+  }
+
+  // Page tabs
+  if (touch.justPressed) {
+    for (int i = 0; i < 4; i++) {
+      int x = 10 + i * 75;
+      if (isButtonPressed(x, 55, 70, 22)) {
+        synthParams.currentPage = i;
+        synthParams.needsRedraw = true;
+        return;
+      }
     }
   }
 
-  // Page-specific touch handling
+  // Page-specific controls
+  bool changed = false;
+
   switch (synthParams.currentPage) {
     case 0: { // OSC page
-      // OSC1 wave buttons
-      if (isButtonPressed(85, 145, 50, 30)) {
-        synthParams.osc1Wave = (synthParams.osc1Wave - 1 + 5) % 5;
-        zombieSynth->setOsc1Waveform((WaveformType)synthParams.osc1Wave);
-      }
-      if (isButtonPressed(85, 180, 50, 30)) {
-        synthParams.osc1Wave = (synthParams.osc1Wave + 1) % 5;
-        zombieSynth->setOsc1Waveform((WaveformType)synthParams.osc1Wave);
+      // OSC1 level slider
+      if (handleSliderTouch(10, 85, 65, 150, synthParams.osc1Level)) {
+        changed = true;
       }
 
-      // OSC2 wave buttons
-      if (isButtonPressed(225, 145, 50, 30)) {
-        synthParams.osc2Wave = (synthParams.osc2Wave - 1 + 5) % 5;
-        zombieSynth->setOsc2Waveform((WaveformType)synthParams.osc2Wave);
+      // OSC2 level slider
+      if (handleSliderTouch(140, 85, 65, 150, synthParams.osc2Level)) {
+        changed = true;
       }
-      if (isButtonPressed(225, 180, 50, 30)) {
-        synthParams.osc2Wave = (synthParams.osc2Wave + 1) % 5;
-        zombieSynth->setOsc2Waveform((WaveformType)synthParams.osc2Wave);
+
+      // Master volume slider
+      if (handleSliderTouch(265, 85, 50, 150, synthParams.masterVolume)) {
+        zombieSynth->setMasterVolume(synthParams.masterVolume);
+        changed = true;
+      }
+
+      // OSC1 wave buttons
+      if (touch.justPressed) {
+        if (isButtonPressed(80, 125, 23, 25)) {
+          synthParams.osc1Wave = (synthParams.osc1Wave - 1 + 5) % 5;
+          zombieSynth->setOsc1Waveform((WaveformType)synthParams.osc1Wave);
+          changed = true;
+        }
+        if (isButtonPressed(107, 125, 23, 25)) {
+          synthParams.osc1Wave = (synthParams.osc1Wave + 1) % 5;
+          zombieSynth->setOsc1Waveform((WaveformType)synthParams.osc1Wave);
+          changed = true;
+        }
+
+        // OSC2 wave buttons
+        if (isButtonPressed(210, 125, 23, 25)) {
+          synthParams.osc2Wave = (synthParams.osc2Wave - 1 + 5) % 5;
+          zombieSynth->setOsc2Waveform((WaveformType)synthParams.osc2Wave);
+          changed = true;
+        }
+        if (isButtonPressed(237, 125, 23, 25)) {
+          synthParams.osc2Wave = (synthParams.osc2Wave + 1) % 5;
+          zombieSynth->setOsc2Waveform((WaveformType)synthParams.osc2Wave);
+          changed = true;
+        }
       }
       break;
     }
 
     case 1: { // Filter page
-      // Filter type buttons
-      if (isButtonPressed(240, 145, 35, 30)) {
-        synthParams.filterType = (synthParams.filterType - 1 + 4) % 4;
-        zombieSynth->setFilterType((FilterType)synthParams.filterType);
+      // Cutoff slider
+      if (handleSliderTouch(10, 85, 65, 150, synthParams.filterCutoff)) {
+        zombieSynth->setFilterCutoff(synthParams.filterCutoff);
+        changed = true;
       }
-      if (isButtonPressed(275, 145, 35, 30)) {
-        synthParams.filterType = (synthParams.filterType + 1) % 4;
-        zombieSynth->setFilterType((FilterType)synthParams.filterType);
+
+      // Resonance slider
+      if (handleSliderTouch(80, 85, 65, 150, synthParams.filterResonance)) {
+        zombieSynth->setFilterResonance(synthParams.filterResonance);
+        changed = true;
+      }
+
+      // Envelope amount slider
+      if (handleSliderTouch(150, 85, 65, 150, synthParams.filterEnvAmount)) {
+        changed = true;
+      }
+
+      // Filter type buttons
+      if (touch.justPressed) {
+        if (isButtonPressed(225, 130, 40, 25)) {
+          synthParams.filterType = (synthParams.filterType - 1 + 4) % 4;
+          zombieSynth->setFilterType((FilterType)synthParams.filterType);
+          changed = true;
+        }
+        if (isButtonPressed(270, 130, 40, 25)) {
+          synthParams.filterType = (synthParams.filterType + 1) % 4;
+          zombieSynth->setFilterType((FilterType)synthParams.filterType);
+          changed = true;
+        }
+      }
+      break;
+    }
+
+    case 2: { // Amp Envelope page
+      // Attack
+      if (handleSliderTouch(10, 85, 70, 150, synthParams.ampAttack)) {
+        synthParams.ampAttack *= 2.0f;  // Scale to 0-2 seconds
+        zombieSynth->setAmpEnvelope(synthParams.ampAttack, synthParams.ampDecay,
+                                     synthParams.ampSustain, synthParams.ampRelease);
+        changed = true;
+      }
+
+      // Decay
+      if (handleSliderTouch(85, 85, 70, 150, synthParams.ampDecay)) {
+        zombieSynth->setAmpEnvelope(synthParams.ampAttack, synthParams.ampDecay,
+                                     synthParams.ampSustain, synthParams.ampRelease);
+        changed = true;
+      }
+
+      // Sustain
+      if (handleSliderTouch(160, 85, 70, 150, synthParams.ampSustain)) {
+        zombieSynth->setAmpEnvelope(synthParams.ampAttack, synthParams.ampDecay,
+                                     synthParams.ampSustain, synthParams.ampRelease);
+        changed = true;
+      }
+
+      // Release
+      if (handleSliderTouch(235, 85, 70, 150, synthParams.ampRelease)) {
+        zombieSynth->setAmpEnvelope(synthParams.ampAttack, synthParams.ampDecay,
+                                     synthParams.ampSustain, synthParams.ampRelease);
+        changed = true;
+      }
+      break;
+    }
+
+    case 3: { // Filter Envelope page
+      // Attack
+      if (handleSliderTouch(10, 85, 70, 150, synthParams.filterAttack)) {
+        synthParams.filterAttack *= 2.0f;
+        zombieSynth->setFilterEnvelope(synthParams.filterAttack, synthParams.filterDecay,
+                                        synthParams.filterSustain, synthParams.filterRelease);
+        changed = true;
+      }
+
+      // Decay
+      if (handleSliderTouch(85, 85, 70, 150, synthParams.filterDecay)) {
+        zombieSynth->setFilterEnvelope(synthParams.filterAttack, synthParams.filterDecay,
+                                        synthParams.filterSustain, synthParams.filterRelease);
+        changed = true;
+      }
+
+      // Sustain
+      if (handleSliderTouch(160, 85, 70, 150, synthParams.filterSustain)) {
+        zombieSynth->setFilterEnvelope(synthParams.filterAttack, synthParams.filterDecay,
+                                        synthParams.filterSustain, synthParams.filterRelease);
+        changed = true;
+      }
+
+      // Release
+      if (handleSliderTouch(235, 85, 70, 150, synthParams.filterRelease)) {
+        zombieSynth->setFilterEnvelope(synthParams.filterAttack, synthParams.filterDecay,
+                                        synthParams.filterSustain, synthParams.filterRelease);
+        changed = true;
       }
       break;
     }
   }
+
+  if (changed) {
+    synthParams.needsRedraw = true;
+  }
 }
 
 void zombieSynthUpdate() {
-  // Process audio in background (should be in separate task)
-  if (zombieSynth) {
-    zombieSynth->processAudio();
+  // Audio processing happens in separate task
+  // Just update voice count display periodically
+  static unsigned long lastUpdate = 0;
+  if (millis() - lastUpdate > 100) {
+    lastUpdate = millis();
+    synthParams.needsRedraw = true;
   }
 }
 
