@@ -3,12 +3,11 @@
 
 #include <Arduino.h>
 #include <HardwareSerial.h>
-#include <USB.h>
-#include <USBMIDI.h>
 
-// MIDI input handling for both USB and 5-pin DIN
+// MIDI input handling for 5-pin DIN
 // 5-pin DIN MIDI uses GPIO 35 (input-only, perfect for MIDI RX)
 // Note: GPIO 16 is RGB LED green, cannot be used
+// USB MIDI can be added later with USB Host library if needed
 
 #define MIDI_SERIAL_RX 35  // 5-pin DIN MIDI input (input-only pin)
 #define MIDI_BAUD_RATE 31250
@@ -16,7 +15,6 @@
 class MIDIInput {
 private:
   HardwareSerial* midiSerial;
-  USBMIDI usbMIDI;
 
   // MIDI parser state
   uint8_t midiStatus;
@@ -132,11 +130,7 @@ public:
     midiSerial = new HardwareSerial(2);
     midiSerial->begin(MIDI_BAUD_RATE, SERIAL_8N1, MIDI_SERIAL_RX, -1);
 
-    // Initialize USB MIDI
-    USB.begin();
-    usbMIDI.begin();
-
-    Serial.println("MIDI Input initialized (USB + 5-pin DIN)");
+    Serial.println("MIDI Input initialized (5-pin DIN on GPIO 35)");
   }
 
   void update() {
@@ -145,47 +139,6 @@ public:
       while (midiSerial->available()) {
         uint8_t byte = midiSerial->read();
         processMIDIByte(byte);
-      }
-    }
-
-    // Process USB MIDI
-    midiEvent_t event;
-    while (usbMIDI.readEvent(&event)) {
-      uint8_t msgType = event.header & 0x0F;
-      uint8_t channel = event.data[0] & 0x0F;
-
-      switch (msgType) {
-        case 0x08: // Note Off
-          if (noteOffCallback) {
-            noteOffCallback(channel, event.data[1], event.data[2]);
-          }
-          break;
-
-        case 0x09: // Note On
-          if (event.data[2] == 0) {
-            if (noteOffCallback) {
-              noteOffCallback(channel, event.data[1], event.data[2]);
-            }
-          } else {
-            if (noteOnCallback) {
-              noteOnCallback(channel, event.data[1], event.data[2]);
-            }
-          }
-          break;
-
-        case 0x0B: // Control Change
-          if (ccCallback) {
-            ccCallback(channel, event.data[1], event.data[2]);
-          }
-          break;
-
-        case 0x0E: // Pitch Bend
-          if (pitchBendCallback) {
-            int16_t bend = ((int16_t)event.data[2] << 7) | event.data[1];
-            bend -= 8192;
-            pitchBendCallback(channel, bend);
-          }
-          break;
       }
     }
   }
