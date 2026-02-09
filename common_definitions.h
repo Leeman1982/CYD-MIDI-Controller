@@ -6,6 +6,7 @@
 #include <BLEDevice.h>
 
 // Color scheme - ZOMBIE SS Theme (Black/Red/White)
+// Fixed with TFT_INVERSION_OFF in User_Setup.h
 #define THEME_BG         0x0000  // Pure Black
 #define THEME_SURFACE    0x1082  // Dark gray
 #define THEME_PRIMARY    0xF800  // Pure Red
