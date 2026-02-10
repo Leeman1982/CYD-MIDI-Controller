@@ -16,18 +16,23 @@ struct SequencerStep {
   bool tie;          // Tie to next step
 };
 
+typedef void (*SeqNoteOnCB)(int trackIdx, int noteNum, int vel);
+typedef void (*SeqNoteOffCB)(int trackIdx, int noteNum);
+
 struct SequencerTrack {
   SequencerStep steps[MAX_SEQ_STEPS];
   int currentStep;
   bool muted;
   int octave;
   int scale;
+  int soundPatchIdx;  // 0-9 = factory preset index for this track
 
   void init() {
     currentStep = 0;
     muted = false;
     octave = 3;
     scale = 0;
+    soundPatchIdx = 0;
 
     for (int i = 0; i < MAX_SEQ_STEPS; i++) {
       steps[i].active = false;
@@ -67,6 +72,8 @@ private:
   int swing;  // 50-75% swing
 
   SynthEngine* synth;
+  SeqNoteOnCB  _noteOnCB;
+  SeqNoteOffCB _noteOffCB;
 
   // Note tracking for note-off
   int activeNotes[MAX_SEQ_TRACKS];
@@ -82,11 +89,19 @@ public:
     stepsPerBar = 16;
     swing = 50;
     synth = NULL;
+    _noteOnCB  = NULL;
+    _noteOffCB = NULL;
 
     for (int i = 0; i < MAX_SEQ_TRACKS; i++) {
       tracks[i].init();
+      tracks[i].soundPatchIdx = i % 10; // default: each track uses a different factory preset
       activeNotes[i] = -1;
     }
+  }
+
+  void setCallbacks(SeqNoteOnCB onCB, SeqNoteOffCB offCB) {
+    _noteOnCB  = onCB;
+    _noteOffCB = offCB;
   }
 
   void setSynthEngine(SynthEngine* s) {
@@ -110,12 +125,11 @@ public:
     currentStep = 0;
 
     // Stop all active notes
-    if (synth) {
-      for (int t = 0; t < MAX_SEQ_TRACKS; t++) {
-        if (activeNotes[t] >= 0) {
-          synth->noteOff(activeNotes[t]);
-          activeNotes[t] = -1;
-        }
+    for (int t = 0; t < MAX_SEQ_TRACKS; t++) {
+      if (activeNotes[t] >= 0) {
+        if (_noteOffCB) _noteOffCB(t, activeNotes[t]);
+        else if (synth) synth->noteOff(activeNotes[t]);
+        activeNotes[t] = -1;
       }
     }
   }
@@ -146,14 +160,16 @@ public:
 
         // Note off for previous step if not tied
         if (activeNotes[t] >= 0 && !step.tie) {
-          synth->noteOff(activeNotes[t]);
+          if (_noteOffCB) _noteOffCB(t, activeNotes[t]);
+          else if (synth) synth->noteOff(activeNotes[t]);
           activeNotes[t] = -1;
         }
 
         // Note on for active steps
         if (step.active) {
           int note = step.note + (tracks[t].octave * 12);
-          synth->noteOn(note, step.velocity);
+          if (_noteOnCB) _noteOnCB(t, note, step.velocity);
+          else if (synth) synth->noteOn(note, step.velocity);
           activeNotes[t] = note;
         }
       }

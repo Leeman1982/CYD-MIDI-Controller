@@ -1,431 +1,322 @@
 /*******************************************************************
- ZOMBIE SS PROPHET-8 SYNTHESIZER
+ ZOMBIE SS PROPHET-8 SYNTHESIZER  v2
  Prophet-8 inspired polyBLEP synth for ESP32 CYD
 
- Features:
+ v2 Features:
  - 8-voice polyphony with polyBLEP oscillators
- - State variable filter with envelope
- - Full ADSR envelopes
- - 50-pattern arpeggiator
- - 16-step sequencer with 4 tracks
- - USB and 5-pin DIN MIDI input
- - PCM5052 DAC output (I2S)
- - ZOMBIE SS themed UI (black/red/white)
+ - State variable filter with ADSR envelopes
+ - LFO (sine/tri/saw/square/S&H) targeting filter/pitch/amp
+ - 50-pattern arpeggiator with BPM ±1/±10 controls
+ - 16-step sequencer with per-track sound select (4 tracks)
+ - Presets: 10 factory + 10 user (NVS persistent via Preferences)
+ - On-screen QWERTY for preset naming
+ - Chord Pad: 8 chord types × 12 roots (bonus feature)
+ - Note name display as notes are played
+ - USB and 5-pin DIN MIDI input (GPIO 35)
+ - PCM5052 DAC output (I2S) on GPIO 22/27/17
  *******************************************************************/
 
 #include <SPI.h>
 #include <XPT2046_Touchscreen.h>
 #include <TFT_eSPI.h>
 
-// Include all mode files
+// Core engine and input
 #include "synth_engine.h"
 #include "midi_input.h"
 #include "arpeggiator_patterns.h"
 #include "zombie_step_sequencer.h"
+
+// v2 support files (included before mode files)
+#include "zombie_lfo.h"
+#include "zombie_presets.h"
+#include "zombie_keyboard_input.h"
+
+// UI elements and mode files (synth_mode first – defines synthParams + getZombieSynth)
+#include "ui_elements.h"
 #include "zombie_synth_mode.h"
 #include "zombie_arp_mode.h"
 #include "zombie_seq_mode.h"
-#include "ui_elements.h"
+#include "zombie_presets_mode.h"
+#include "zombie_chord_pad.h"
 
-// Hardware setup
-#define XPT2046_IRQ 36
+// ── Hardware pins ──────────────────────────────────────────────────────────
+#define XPT2046_IRQ  36
 #define XPT2046_MOSI 32
 #define XPT2046_MISO 39
-#define XPT2046_CLK 25
-#define XPT2046_CS 33
+#define XPT2046_CLK  25
+#define XPT2046_CS   33
 
-// Global objects
+// ── Global objects ─────────────────────────────────────────────────────────
 SPIClass mySpi = SPIClass(VSPI);
 XPT2046_Touchscreen ts(XPT2046_CS, XPT2046_IRQ);
 TFT_eSPI tft = TFT_eSPI();
 
-// MIDI input
-MIDIInput midiInput;
-
-// Touch state
+MIDIInput  midiInput;
 TouchState touch;
+AppMode    currentMode = MENU;
 
-// App state
-AppMode currentMode = MENU;
+// Global LFO shared across all modes
+LFOEngine globalLFO;
+
+// Last played MIDI note (for note-name corner display)
+int lastPlayedMidiNote = -1;
 
 // Audio task handle
 TaskHandle_t audioTaskHandle = NULL;
 
-// MIDI callbacks
+// ── MIDI callbacks ─────────────────────────────────────────────────────────
 void onMIDINoteOn(uint8_t channel, uint8_t note, uint8_t velocity) {
-  SynthEngine* synth = getZombieSynth();
-  if (synth) {
-    synth->noteOn(note, velocity);
-  }
+  lastPlayedMidiNote = note;
 
-  Arpeggiator* arp = getZombieArp();
-  if (arp) {
-    arp->noteOn(note);
-  }
+  SynthEngine* synth = getZombieSynth();
+  Arpeggiator* arp   = getZombieArp();
+
+  if (synth) synth->noteOn(note, velocity);
+  if (arp)   arp->noteOn(note);
 }
 
 void onMIDINoteOff(uint8_t channel, uint8_t note, uint8_t velocity) {
   SynthEngine* synth = getZombieSynth();
-  if (synth) {
-    synth->noteOff(note);
-  }
+  Arpeggiator* arp   = getZombieArp();
 
-  Arpeggiator* arp = getZombieArp();
-  if (arp) {
-    arp->noteOff(note);
-  }
+  if (synth) synth->noteOff(note);
+  if (arp)   arp->noteOff(note);
 }
 
 void onMIDICC(uint8_t channel, uint8_t cc, uint8_t value) {
-  SynthEngine* synth = getZombieSynth();
-  Arpeggiator* arp = getZombieArp();
-  ZombieSequencer* seq = getZombieSeq();
+  SynthEngine*     synth = getZombieSynth();
+  Arpeggiator*     arp   = getZombieArp();
+  ZombieSequencer* seq   = getZombieSeq();
 
-  float normalizedValue = value / 127.0f;
+  float v = value / 127.0f;
 
   switch (cc) {
-    // ===== FILTER =====
-    case 74: // Filter cutoff
-      if (synth) synth->setFilterCutoff(normalizedValue);
-      break;
-    case 71: // Filter resonance
-      if (synth) synth->setFilterResonance(normalizedValue);
-      break;
+    // ── Filter ──────────────────────────────────────────────────────────
+    case 74: if (synth) { synth->setFilterCutoff(v);    synthParams.filterCutoff    = v; synthParams.needsRedraw = true; } break;
+    case 71: if (synth) { synth->setFilterResonance(v); synthParams.filterResonance = v; synthParams.needsRedraw = true; } break;
 
-    // ===== VOLUME =====
-    case 7: // Master volume
-      if (synth) synth->setMasterVolume(normalizedValue);
-      break;
-    case 12: // OSC1 Level
-      // Will be handled via external function
-      break;
-    case 13: // OSC2 Level
-      // Will be handled via external function
-      break;
+    // ── Volume ──────────────────────────────────────────────────────────
+    case 7:  if (synth) { synth->setMasterVolume(v); synthParams.masterVolume = v; synthParams.needsRedraw = true; } break;
+    case 12: synthParams.osc1Level = v; synthParams.needsRedraw = true; break;
+    case 13: synthParams.osc2Level = v; synthParams.needsRedraw = true; break;
 
-    // ===== AMP ENVELOPE =====
-    case 73: // Amp Attack (0-2 seconds)
-      if (synth) {
-        float attack = normalizedValue * 2.0f;
-        // Get current envelope values and update just attack
-        synth->setAmpEnvelope(attack, 0.3f, 0.7f, 0.5f);
-      }
-      break;
-    case 75: // Amp Decay
-      if (synth) {
-        float decay = normalizedValue * 2.0f;
-        synth->setAmpEnvelope(0.01f, decay, 0.7f, 0.5f);
-      }
-      break;
-    case 70: // Amp Sustain
-      if (synth) {
-        synth->setAmpEnvelope(0.01f, 0.3f, normalizedValue, 0.5f);
-      }
-      break;
-    case 72: // Amp Release
-      if (synth) {
-        float release = normalizedValue * 2.0f;
-        synth->setAmpEnvelope(0.01f, 0.3f, 0.7f, release);
-      }
-      break;
+    // ── Amp Envelope ────────────────────────────────────────────────────
+    case 73: synthParams.ampAttack  = v*2.0f; if (synth) synth->setAmpEnvelope(synthParams.ampAttack, synthParams.ampDecay, synthParams.ampSustain, synthParams.ampRelease); synthParams.needsRedraw=true; break;
+    case 75: synthParams.ampDecay   = v*2.0f; if (synth) synth->setAmpEnvelope(synthParams.ampAttack, synthParams.ampDecay, synthParams.ampSustain, synthParams.ampRelease); synthParams.needsRedraw=true; break;
+    case 70: synthParams.ampSustain = v;      if (synth) synth->setAmpEnvelope(synthParams.ampAttack, synthParams.ampDecay, synthParams.ampSustain, synthParams.ampRelease); synthParams.needsRedraw=true; break;
+    case 72: synthParams.ampRelease = v*2.0f; if (synth) synth->setAmpEnvelope(synthParams.ampAttack, synthParams.ampDecay, synthParams.ampSustain, synthParams.ampRelease); synthParams.needsRedraw=true; break;
 
-    // ===== FILTER ENVELOPE =====
-    case 76: // Filter Attack
-      if (synth) {
-        float attack = normalizedValue * 2.0f;
-        synth->setFilterEnvelope(attack, 0.3f, 0.5f, 0.3f);
-      }
-      break;
-    case 77: // Filter Decay
-      if (synth) {
-        float decay = normalizedValue * 2.0f;
-        synth->setFilterEnvelope(0.01f, decay, 0.5f, 0.3f);
-      }
-      break;
-    case 78: // Filter Sustain
-      if (synth) {
-        synth->setFilterEnvelope(0.01f, 0.3f, normalizedValue, 0.3f);
-      }
-      break;
-    case 79: // Filter Release
-      if (synth) {
-        float release = normalizedValue * 2.0f;
-        synth->setFilterEnvelope(0.01f, 0.3f, 0.5f, release);
-      }
-      break;
+    // ── Filter Envelope ─────────────────────────────────────────────────
+    case 76: synthParams.filterAttack  = v*2.0f; if (synth) synth->setFilterEnvelope(synthParams.filterAttack, synthParams.filterDecay, synthParams.filterSustain, synthParams.filterRelease); synthParams.needsRedraw=true; break;
+    case 77: synthParams.filterDecay   = v*2.0f; if (synth) synth->setFilterEnvelope(synthParams.filterAttack, synthParams.filterDecay, synthParams.filterSustain, synthParams.filterRelease); synthParams.needsRedraw=true; break;
+    case 78: synthParams.filterSustain = v;      if (synth) synth->setFilterEnvelope(synthParams.filterAttack, synthParams.filterDecay, synthParams.filterSustain, synthParams.filterRelease); synthParams.needsRedraw=true; break;
+    case 79: synthParams.filterRelease = v*2.0f; if (synth) synth->setFilterEnvelope(synthParams.filterAttack, synthParams.filterDecay, synthParams.filterSustain, synthParams.filterRelease); synthParams.needsRedraw=true; break;
 
-    // ===== ARPEGGIATOR =====
-    case 80: // Arp BPM (30-300)
-      if (arp) {
-        float bpm = 30.0f + (normalizedValue * 270.0f);
-        arp->setBPM(bpm);
-      }
-      break;
-    case 81: // Arp Pattern (0-49)
-      if (arp) {
-        int pattern = (int)(normalizedValue * 49.0f);
-        arp->setPattern((ArpPattern)pattern);
-      }
-      break;
-    case 82: // Arp Octave Range (1-4)
-      if (arp) {
-        int octaves = 1 + (int)(normalizedValue * 3.0f);
-        arp->setOctaveRange(octaves);
-      }
-      break;
-    case 83: // Arp Gate Length (10-100%)
-      if (arp) {
-        int gate = 10 + (int)(normalizedValue * 90.0f);
-        arp->setGateLength(gate);
-      }
-      break;
+    // ── Arpeggiator ─────────────────────────────────────────────────────
+    case 80: if (arp) arp->setBPM(30.0f + v*270.0f);                        break;
+    case 81: if (arp) arp->setPattern((ArpPattern)(int)(v * 49.0f));         break;
+    case 82: if (arp) arp->setOctaveRange(1 + (int)(v * 3.0f));              break;
+    case 83: if (arp) arp->setGateLength(10 + (int)(v * 90.0f));             break;
 
-    // ===== SEQUENCER =====
-    case 85: // Sequencer BPM (40-300)
-      if (seq) {
-        float bpm = 40.0f + (normalizedValue * 260.0f);
-        seq->setBPM(bpm);
-      }
-      break;
-    case 86: // Sequencer Swing (50-75%)
-      if (seq) {
-        int swing = 50 + (int)(normalizedValue * 25.0f);
-        seq->setSwing(swing);
-      }
-      break;
+    // ── Sequencer ───────────────────────────────────────────────────────
+    case 85: if (seq) seq->setBPM(40.0f + v * 260.0f);   break;
+    case 86: if (seq) seq->setSwing(50 + (int)(v * 25)); break;
+
+    // ── LFO (CC 87=rate, CC 88=depth) ───────────────────────────────────
+    case 87: globalLFO.rate  = v * 20.0f;                             break;
+    case 88: globalLFO.depth = v; globalLFO.enabled = (v > 0.01f);   break;
   }
 }
 
-void onMIDIPitchBend(uint8_t channel, int16_t bend) {
-  // Pitch bend handling can be added here
-}
+void onMIDIPitchBend(uint8_t channel, int16_t bend) {}
 
-// Audio processing task (runs on Core 0)
+// ── Audio task (Core 0) ────────────────────────────────────────────────────
 void audioTask(void* parameter) {
   while (true) {
     SynthEngine* synth = getZombieSynth();
-    if (synth) {
-      synth->processAudio();
-    }
-
-    // Small delay to prevent watchdog timeout
+    if (synth) synth->processAudio();
     vTaskDelay(1);
   }
 }
 
-// Menu system
+// ── Menu ───────────────────────────────────────────────────────────────────
 struct AppIcon {
-  String name;
-  String symbol;
-  uint16_t color;
-  AppMode mode;
+  const char* name;
+  const char* symbol;
+  AppMode     mode;
 };
 
-AppIcon apps[] = {
-  {"SYNTH", "♪♪", THEME_PRIMARY, ZOMBIE_SYNTH},
-  {"ARP", "↗↗", THEME_PRIMARY, ZOMBIE_ARP},
-  {"SEQ", "▣▣", THEME_PRIMARY, ZOMBIE_SEQ}
+static const AppIcon apps[] = {
+  {"SYNTH",   "SS",  ZOMBIE_SYNTH},
+  {"ARP",     "ARP", ZOMBIE_ARP},
+  {"SEQ",     "SEQ", ZOMBIE_SEQ},
+  {"PRESETS", "PRE", ZOMBIE_PRESETS},
+  {"CHORD",   "CHD", ZOMBIE_CHORD},
 };
+static const int NUM_APPS = 5;
 
-int numApps = 3;
+// Layout: row0 = icons 0-2 (3 wide), row1 = icons 3-4 (2 wide, centred)
+static const int ICON_W = 88, ICON_H = 58, ICON_GAP = 8;
+
+static int iconX(int i) {
+  if (i < 3) return (320 - 3*(ICON_W+ICON_GAP) + ICON_GAP) / 2 + (i % 3)*(ICON_W+ICON_GAP);
+  else        return (320 - 2*(ICON_W+ICON_GAP) + ICON_GAP) / 2 + (i - 3)*(ICON_W+ICON_GAP);
+}
+static int iconY(int i) {
+  return 85 + (i / 3) * (ICON_H + ICON_GAP);
+}
 
 void drawMenu() {
   tft.fillScreen(THEME_BG);
 
-  // ZOMBIE SS Header
-  tft.fillRect(0, 0, 320, 60, THEME_BG);
-  tft.drawRect(0, 0, 320, 60, THEME_OUTLINE);
-  tft.drawRect(1, 1, 318, 58, THEME_OUTLINE);
-  tft.drawRect(2, 2, 316, 56, THEME_OUTLINE);
-
+  // Header
+  tft.drawRect(0, 0, 320, 62, THEME_OUTLINE);
+  tft.drawRect(1, 1, 318, 60, THEME_OUTLINE);
+  tft.drawRect(2, 2, 316, 58, THEME_OUTLINE);
   tft.setTextColor(THEME_PRIMARY, THEME_BG);
-  tft.setTextSize(2);
-  tft.drawCentreString("ZOMBIE SS", 160, 10, 4);
-
+  tft.drawCentreString("ZOMBIE SS", 160, 8, 4);
   tft.setTextColor(THEME_ACCENT, THEME_BG);
-  tft.setTextSize(1);
-  tft.drawCentreString("PROPHET SYNTHESIZER", 160, 38, 2);
+  tft.drawCentreString("PROPHET SYNTHESIZER  v2", 160, 38, 2);
 
-  // Version
-  tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
-  tft.drawString("v1.0", 10, 70, 2);
-
-  // Voice count
+  // Status line
   SynthEngine* synth = getZombieSynth();
   if (synth) {
     char buf[20];
     sprintf(buf, "VOICES:%d/8", synth->getActiveVoiceCount());
     tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
-    tft.drawRightString(buf, 310, 70, 2);
+    tft.drawRightString(buf, 314, 68, 2);
   }
-
-  // App icons grid
-  int iconsPerRow = 3;
-  int iconW = 90;
-  int iconH = 60;
-  int spacing = 10;
-  int startX = (320 - (iconsPerRow * iconW + (iconsPerRow - 1) * spacing)) / 2;
-  int startY = 100;
-
-  for (int i = 0; i < numApps; i++) {
-    int row = i / iconsPerRow;
-    int col = i % iconsPerRow;
-    int x = startX + col * (iconW + spacing);
-    int y = startY + row * (iconH + spacing);
-
-    // Draw icon background
-    tft.fillRoundRect(x, y, iconW, iconH, 8, THEME_BG);
-    tft.drawRoundRect(x, y, iconW, iconH, 8, THEME_OUTLINE);
-    tft.drawRoundRect(x + 1, y + 1, iconW - 2, iconH - 2, 7, THEME_OUTLINE);
-
-    // Draw symbol
-    tft.setTextColor(apps[i].color, THEME_BG);
-    tft.setTextSize(2);
-    tft.drawCentreString(apps[i].symbol, x + iconW / 2, y + 10, 4);
-
-    // Draw name
-    tft.setTextColor(THEME_PRIMARY, THEME_BG);
-    tft.setTextSize(1);
-    tft.drawCentreString(apps[i].name, x + iconW / 2, y + 42, 2);
-  }
-
-  // Instructions
   tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
-  tft.drawCentreString("TAP TO SELECT MODE", 160, 220, 2);
+  tft.drawString("v2.0", 6, 68, 2);
+
+  // App icons
+  for (int i = 0; i < NUM_APPS; i++) {
+    int x = iconX(i), y = iconY(i);
+    tft.fillRoundRect(x, y, ICON_W, ICON_H, 8, THEME_BG);
+    tft.drawRoundRect(x, y, ICON_W, ICON_H, 8, THEME_OUTLINE);
+    tft.drawRoundRect(x+1, y+1, ICON_W-2, ICON_H-2, 7, THEME_OUTLINE);
+    tft.setTextColor(THEME_PRIMARY, THEME_BG);
+    tft.drawCentreString(apps[i].symbol, x + ICON_W/2, y + 8,  4);
+    tft.drawCentreString(apps[i].name,   x + ICON_W/2, y + 40, 2);
+  }
+
+  tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
+  tft.drawCentreString("TAP TO SELECT MODE", 160, 228, 2);
 }
 
 void enterMode(AppMode mode) {
   currentMode = mode;
   tft.fillScreen(THEME_BG);
-
   switch (mode) {
-    case ZOMBIE_SYNTH:
-      zombieSynthInit();
-      break;
-    case ZOMBIE_ARP:
-      zombieArpInit();
-      break;
-    case ZOMBIE_SEQ:
-      zombieSeqInit();
-      break;
-    case MENU:
-      drawMenu();
-      break;
+    case ZOMBIE_SYNTH:   zombieSynthInit();   break;
+    case ZOMBIE_ARP:     zombieArpInit();     break;
+    case ZOMBIE_SEQ:     zombieSeqInit();     break;
+    case ZOMBIE_PRESETS: zombiePresetsInit(); break;
+    case ZOMBIE_CHORD:   zombieChordInit();   break;
+    default:             drawMenu();          break;
   }
 }
 
 void exitToMenu() {
-  // Stop all notes
-  SynthEngine* synth = getZombieSynth();
-  if (synth) {
-    synth->allNotesOff();
-  }
-
-  Arpeggiator* arp = getZombieArp();
-  if (arp) {
-    arp->allNotesOff();
-  }
-
-  ZombieSequencer* seq = getZombieSeq();
-  if (seq) {
-    seq->stop();
-  }
-
+  SynthEngine*     synth = getZombieSynth();
+  Arpeggiator*     arp   = getZombieArp();
+  ZombieSequencer* seq   = getZombieSeq();
+  if (synth) synth->allNotesOff();
+  if (arp)   arp->allNotesOff();
+  if (seq)   seq->stop();
+  chordAllOff();
   enterMode(MENU);
 }
 
+// ── Setup ──────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
-  Serial.println("ZOMBIE SS Prophet Synthesizer");
-  Serial.println("Initializing...");
+  Serial.println("ZOMBIE SS v2 — initializing");
 
-  // Initialize SPI for touch
+  // Touch SPI
   mySpi.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
   ts.begin(mySpi);
   ts.setRotation(1);
 
-  // Initialize display
+  // Display
   tft.init();
   tft.setRotation(1);
-  tft.invertDisplay(true);  // REQUIRED for ESP32-2432S028R - fixes inverted colours
+  tft.invertDisplay(true);   // Required for ESP32-2432S028R colour fix
   tft.fillScreen(THEME_BG);
 
   // Splash screen
   tft.setTextColor(THEME_PRIMARY, THEME_BG);
-  tft.setTextSize(2);
-  tft.drawCentreString("ZOMBIE SS", 160, 80, 4);
+  tft.drawCentreString("ZOMBIE SS", 160, 75, 4);
   tft.setTextColor(THEME_ACCENT, THEME_BG);
-  tft.drawCentreString("PROPHET SYNTHESIZER", 160, 120, 2);
+  tft.drawCentreString("PROPHET SYNTHESIZER v2", 160, 112, 2);
   tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
-  tft.drawCentreString("Initializing audio...", 160, 150, 2);
+  tft.drawCentreString("Initializing audio...", 160, 148, 2);
+  delay(800);
 
-  delay(1000);
-
-  // Initialize synth engine
+  // Init synth engine
   zombieSynthInit();
-  Serial.println("Synth engine initialized");
+  Serial.println("Synth OK");
 
-  // Initialize MIDI input
-  tft.drawCentreString("Initializing MIDI...    ", 160, 150, 2);
+  // Init MIDI
+  tft.fillRect(0, 148, 320, 16, THEME_BG);
+  tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
+  tft.drawCentreString("Initializing MIDI...", 160, 148, 2);
   midiInput.init();
   midiInput.setNoteOnCallback(onMIDINoteOn);
   midiInput.setNoteOffCallback(onMIDINoteOff);
   midiInput.setCCCallback(onMIDICC);
   midiInput.setPitchBendCallback(onMIDIPitchBend);
-  Serial.println("MIDI input initialized");
+  Serial.println("MIDI OK");
 
-  // Start audio processing task on Core 0
-  tft.drawCentreString("Starting audio task...", 160, 150, 2);
-  xTaskCreatePinnedToCore(
-    audioTask,          // Task function
-    "AudioTask",        // Task name
-    8192,               // Stack size
-    NULL,               // Parameters
-    24,                 // Priority (high)
-    &audioTaskHandle,   // Task handle
-    0                   // Core 0
-  );
-  Serial.println("Audio task started on Core 0");
+  // Audio task on Core 0 (priority 24)
+  tft.fillRect(0, 148, 320, 16, THEME_BG);
+  tft.drawCentreString("Starting audio task...", 160, 148, 2);
+  xTaskCreatePinnedToCore(audioTask, "AudioTask", 8192, NULL, 24, &audioTaskHandle, 0);
+  Serial.println("Audio task on Core 0");
 
-  delay(500);
-
-  // Enter menu
+  delay(400);
   enterMode(MENU);
   Serial.println("Ready!");
 }
 
+// ── Main loop ──────────────────────────────────────────────────────────────
 void loop() {
   // Update touch state
   updateTouch();
 
-  // Update MIDI input
+  // Process incoming MIDI
   midiInput.update();
 
-  // Handle back button (universal)
-  if (currentMode != MENU && touch.justPressed && isButtonPressed(10, 10, 50, 25)) {
-    exitToMenu();
-    return;
+  // ── LFO tick at 200 Hz ──────────────────────────────────────────────
+  static unsigned long lastLfoTick = 0;
+  if (millis() - lastLfoTick >= 5) {
+    lastLfoTick = millis();
+    globalLFO.tick();
+
+    SynthEngine* synth = getZombieSynth();
+    if (synth && globalLFO.enabled) {
+      float out = globalLFO.output;
+      switch (globalLFO.target) {
+        case LFO_TARGET_FILTER:
+          synth->setFilterCutoff(constrain(synthParams.filterCutoff + out * 0.5f, 0.0f, 1.0f));
+          break;
+        case LFO_TARGET_AMP:
+          synth->setMasterVolume(constrain(synthParams.masterVolume + out * 0.3f, 0.0f, 1.0f));
+          break;
+        case LFO_TARGET_PITCH:
+          // Vibrato: wobble filter slightly for pseudo-pitch effect
+          synth->setFilterCutoff(constrain(synthParams.filterCutoff + out * 0.15f, 0.0f, 1.0f));
+          break;
+      }
+    }
   }
 
-  // Mode-specific logic
+  // ── Mode dispatch ────────────────────────────────────────────────────
   switch (currentMode) {
     case MENU:
       if (touch.justPressed) {
-        // Check app icon touches
-        int iconsPerRow = 3;
-        int iconW = 90;
-        int iconH = 60;
-        int spacing = 10;
-        int startX = (320 - (iconsPerRow * iconW + (iconsPerRow - 1) * spacing)) / 2;
-        int startY = 100;
-
-        for (int i = 0; i < numApps; i++) {
-          int row = i / iconsPerRow;
-          int col = i % iconsPerRow;
-          int x = startX + col * (iconW + spacing);
-          int y = startY + row * (iconH + spacing);
-
-          if (isButtonPressed(x, y, iconW, iconH)) {
+        for (int i = 0; i < NUM_APPS; i++) {
+          if (isButtonPressed(iconX(i), iconY(i), ICON_W, ICON_H)) {
             enterMode(apps[i].mode);
             break;
           }
@@ -450,7 +341,19 @@ void loop() {
       zombieSeqHandleTouch();
       zombieSeqUpdate();
       break;
+
+    case ZOMBIE_PRESETS:
+      zombiePresetsDraw();
+      zombiePresetsHandleTouch();
+      zombiePresetsUpdate();
+      break;
+
+    case ZOMBIE_CHORD:
+      zombieChordDraw();
+      zombieChordHandleTouch();
+      zombieChordUpdate();
+      break;
   }
 
-  delay(20); // 50 Hz UI refresh
+  delay(20);  // ~50 Hz UI refresh rate
 }
