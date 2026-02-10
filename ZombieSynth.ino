@@ -23,6 +23,7 @@
 // Core engine and input
 #include "synth_engine.h"
 #include "midi_input.h"
+#include "midi_output.h"
 #include "arpeggiator_patterns.h"
 #include "zombie_step_sequencer.h"
 
@@ -52,6 +53,7 @@ XPT2046_Touchscreen ts(XPT2046_CS, XPT2046_IRQ);
 TFT_eSPI tft = TFT_eSPI();
 
 MIDIInput  midiInput;
+MIDIOutput midiOut;
 TouchState touch;
 AppMode    currentMode = MENU;
 
@@ -68,11 +70,17 @@ TaskHandle_t audioTaskHandle = NULL;
 void onMIDINoteOn(uint8_t channel, uint8_t note, uint8_t velocity) {
   lastPlayedMidiNote = note;
 
-  SynthEngine* synth = getZombieSynth();
-  Arpeggiator* arp   = getZombieArp();
+  SynthEngine*     synth = getZombieSynth();
+  Arpeggiator*     arp   = getZombieArp();
+  ZombieSequencer* seq   = getZombieSeq();
 
-  if (synth) synth->noteOn(note, velocity);
-  if (arp)   arp->noteOn(note);
+  // Live recording: feed note into sequencer when recording is active
+  if (seq && seq->getIsRecording() && seq->getIsPlaying()) {
+    seq->recordNote(note, velocity);
+  } else {
+    if (synth) synth->noteOn(note, velocity);
+    if (arp)   arp->noteOn(note);
+  }
 }
 
 void onMIDINoteOff(uint8_t channel, uint8_t note, uint8_t velocity) {
@@ -223,7 +231,16 @@ void exitToMenu() {
   ZombieSequencer* seq   = getZombieSeq();
   if (synth) synth->allNotesOff();
   if (arp)   arp->allNotesOff();
-  if (seq)   seq->stop();
+  if (seq) {
+    if (seq->getIsPlaying()) midiOut.stop();  // MIDI stop to external devices
+    seq->stop();
+    // All notes off on all MIDI channels used by tracks
+    for (int t = 0; t < MAX_SEQ_TRACKS; t++) {
+      SequencerTrack* tr = seq->getTrack(t);
+      if (tr && (tr->midiOutput == SEQ_OUT_EXTERNAL || tr->midiOutput == SEQ_OUT_BOTH))
+        midiOut.allNotesOff(tr->midiChannel - 1);
+    }
+  }
   chordAllOff();
   enterMode(MENU);
 }
@@ -257,10 +274,16 @@ void setup() {
   zombieSynthInit();
   Serial.println("Synth OK");
 
-  // Init MIDI
+  // Init MIDI OUT
   tft.fillRect(0, 148, 320, 16, THEME_BG);
   tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
-  tft.drawCentreString("Initializing MIDI...", 160, 148, 2);
+  tft.drawCentreString("Initializing MIDI OUT...", 160, 148, 2);
+  midiOut.init();
+  Serial.println("MIDI OUT OK");
+
+  // Init MIDI IN
+  tft.fillRect(0, 148, 320, 16, THEME_BG);
+  tft.drawCentreString("Initializing MIDI IN...", 160, 148, 2);
   midiInput.init();
   midiInput.setNoteOnCallback(onMIDINoteOn);
   midiInput.setNoteOffCallback(onMIDINoteOff);
