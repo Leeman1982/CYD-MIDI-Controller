@@ -347,6 +347,7 @@ void setup() {
   // Initialize display
   tft.init();
   tft.setRotation(1);
+  tft.invertDisplay(true);  // REQUIRED for ESP32-2432S028R - fixes inverted colours
   tft.fillScreen(THEME_BG);
 
   // Splash screen
