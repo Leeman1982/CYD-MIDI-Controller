@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <driver/i2s.h>
+#include "zombie_effects.h"
 
 // Prophet-8 style synthesizer engine with polyBLEP oscillators
 // Supports 8-voice polyphony with full ADSR, filter, and modulation
@@ -54,8 +55,12 @@ enum WaveformType {
   WAVE_SQUARE,
   WAVE_TRIANGLE,
   WAVE_SINE,
-  WAVE_PULSE
+  WAVE_PULSE,
+  WAVE_NOISE,     // White noise via LCG
+  WAVE_SUPERSAW   // 3 detuned saws
 };
+
+const char* waveformNames[] = {"SAW","SQR","TRI","SIN","PUL","NOI","SUP"};
 
 // Filter types
 enum FilterType {
@@ -219,14 +224,20 @@ struct Filter {
 struct Oscillator {
   WaveformType waveform;
   float phase;
+  float phase2;   // extra phase for supersaw voice 2
+  float phase3;   // extra phase for supersaw voice 3
   float frequency;
   float pulseWidth;
+  uint32_t noiseSeed;  // LCG state
 
   void init(WaveformType wave) {
     waveform = wave;
     phase = 0.0f;
+    phase2 = 0.33f;
+    phase3 = 0.66f;
     frequency = 440.0f;
     pulseWidth = 0.5f;
+    noiseSeed = 12345;
   }
 
   void setFrequency(float freq) {
@@ -270,13 +281,35 @@ struct Oscillator {
       }
 
       case WAVE_SINE: {
-        sample = sin(TWO_PI * phase);
+        sample = sinf(TWO_PI * phase);
+        break;
+      }
+
+      case WAVE_NOISE: {
+        // LCG white noise — frequency param not used (full bandwidth)
+        noiseSeed = noiseSeed * 1664525u + 1013904223u;
+        sample = ((int32_t)noiseSeed) / 2147483648.0f;
+        break;
+      }
+
+      case WAVE_SUPERSAW: {
+        // 3 detuned saw waves mixed — slightly detuned around fundamental
+        float dt2 = (frequency * 1.007f) / SAMPLE_RATE;
+        float dt3 = (frequency * 0.993f) / SAMPLE_RATE;
+        float s1 = 2.0f * phase  - 1.0f; s1 -= polyBlep(phase,  dt);
+        float s2 = 2.0f * phase2 - 1.0f; s2 -= polyBlep(phase2, dt2);
+        float s3 = 2.0f * phase3 - 1.0f; s3 -= polyBlep(phase3, dt3);
+        sample = (s1 * 0.5f + s2 * 0.25f + s3 * 0.25f);
+        phase2 += dt2; if (phase2 >= 1.0f) phase2 -= 1.0f;
+        phase3 += dt3; if (phase3 >= 1.0f) phase3 -= 1.0f;
         break;
       }
     }
 
-    phase += dt;
-    if (phase >= 1.0f) phase -= 1.0f;
+    if (waveform != WAVE_NOISE) {
+      phase += dt;
+      if (phase >= 1.0f) phase -= 1.0f;
+    }
 
     return sample;
   }
@@ -289,6 +322,19 @@ struct Voice {
   bool active;
   unsigned long noteOnTime;
 
+  // Per-voice modulation
+  float pitchBendRatio;   // multiplier for frequency (1.0 = no bend)
+  float aftertouchMod;    // 0-1, maps to filter cutoff boost
+  float lfoFilterMod;     // from LFO → filter
+  float lfoPitchMod;      // from LFO → pitch (semitones ratio)
+  float lfoAmpMod;        // from LFO → amplitude
+
+  // Patch parameters (set from preset/UI)
+  float osc2DetuneRatio;  // e.g. 1.005 for slight detune
+  float osc2SemiOffset;   // semitone offset (0 = unison, 12 = octave)
+  float filterEnvAmt;     // 0-1 how much filter env modulates cutoff
+  float baseCutoff;       // stored base cutoff so LFO can offset from it
+
   Oscillator osc1;
   Oscillator osc2;
   Filter filter;
@@ -300,6 +346,15 @@ struct Voice {
     velocity = 0;
     active = false;
     noteOnTime = 0;
+    pitchBendRatio = 1.0f;
+    aftertouchMod  = 0.0f;
+    lfoFilterMod   = 0.0f;
+    lfoPitchMod    = 1.0f;
+    lfoAmpMod      = 0.0f;
+    osc2DetuneRatio = 1.005f;
+    osc2SemiOffset  = 0.0f;
+    filterEnvAmt    = 0.3f;
+    baseCutoff      = 0.8f;
 
     osc1.init(WAVE_SAW);
     osc2.init(WAVE_SAW);
@@ -314,9 +369,10 @@ struct Voice {
     active = true;
     noteOnTime = millis();
 
-    float freq = 440.0f * pow(2.0f, (n - 69) / 12.0f);
+    float freq = 440.0f * powf(2.0f, (n - 69) / 12.0f);
+    float freq2 = freq * osc2DetuneRatio * powf(2.0f, osc2SemiOffset / 12.0f);
     osc1.setFrequency(freq);
-    osc2.setFrequency(freq * 1.005f); // Slight detune for thickness
+    osc2.setFrequency(freq2);
     osc1.phase = 0.0f;
     osc2.phase = 0.0f;
 
@@ -329,30 +385,35 @@ struct Voice {
     filterEnv.noteOff();
   }
 
+  // Called per-sample from SynthEngine::processAudio()
   float process() {
     if (!active) return 0.0f;
 
-    // Generate oscillator signals
+    // Apply pitch bend + LFO pitch to oscillator frequencies
+    float freq = 440.0f * powf(2.0f, (note - 69) / 12.0f);
+    float freq2 = freq * osc2DetuneRatio * powf(2.0f, osc2SemiOffset / 12.0f);
+    osc1.setFrequency(freq * pitchBendRatio * lfoPitchMod);
+    osc2.setFrequency(freq2 * pitchBendRatio * lfoPitchMod);
+
     float osc1Out = osc1.process();
     float osc2Out = osc2.process();
     float oscMix = (osc1Out + osc2Out) * 0.5f;
 
-    // Apply filter envelope to cutoff
+    // Filter cutoff: base + env + LFO + aftertouch
     float filterEnvValue = filterEnv.process();
-    float modCutoff = filter.cutoff + (filterEnvValue * 0.3f);
-    filter.setCutoff(modCutoff);
+    float modCutoff = baseCutoff
+                    + filterEnvValue * filterEnvAmt
+                    + lfoFilterMod
+                    + aftertouchMod * 0.2f;
+    filter.setCutoff(constrain(modCutoff, 0.0f, 1.0f));
 
-    // Process through filter
     float filtered = filter.process(oscMix);
 
-    // Apply amplitude envelope
     float ampEnvValue = ampEnv.process();
-    float output = filtered * ampEnvValue * (velocity / 127.0f);
+    float ampScale = 1.0f - lfoAmpMod * 0.5f; // lfoAmpMod 0-1 → tremolo
+    float output = filtered * ampEnvValue * ampScale * (velocity / 127.0f);
 
-    // Deactivate voice if envelope finished
-    if (!ampEnv.isActive()) {
-      active = false;
-    }
+    if (!ampEnv.isActive()) active = false;
 
     return output;
   }
@@ -364,63 +425,130 @@ private:
   Voice voices[MAX_VOICES];
   int16_t audioBuffer[BUFFER_SIZE * 2]; // Stereo
 
-  // Synth parameters
+  // Synth parameters (public-accessible via getters/setters)
   float masterVolume;
+  float osc2Detune;      // ratio offset e.g. 0.005
+  float osc2Semitones;   // semitone offset
   float osc1Level;
   float osc2Level;
-  float osc2Detune;
-  float osc2Semitones;
 
-  // LFO
-  float lfoRate;
-  float lfoDepth;
-  float lfoPhase;
+  // Global modulation state (applied each audio tick by LFO/aftertouch routines)
+  float globalLfoFilterMod;  // -1..+1 mapped to cutoff offset
+  float globalLfoPitchMod;   // -1..+1 mapped to semitone ratio
+  float globalLfoAmpMod;     // 0..1 tremolo depth
+  float globalLfoPWMod;      // 0..1 pulse width offset
+  float globalPitchBendRatio;// frequency multiplier (1.0=center)
+  float globalAftertouch;    // 0-1
 
   // Find free voice or steal oldest
   int findVoice(int note) {
-    // First, try to find matching note
     for (int i = 0; i < MAX_VOICES; i++) {
-      if (voices[i].active && voices[i].note == note) {
-        return i;
-      }
+      if (voices[i].active && voices[i].note == note) return i;
     }
-
-    // Then try to find free voice
     for (int i = 0; i < MAX_VOICES; i++) {
-      if (!voices[i].active) {
-        return i;
-      }
+      if (!voices[i].active) return i;
     }
-
-    // Steal oldest voice
     int oldest = 0;
     unsigned long oldestTime = voices[0].noteOnTime;
     for (int i = 1; i < MAX_VOICES; i++) {
-      if (voices[i].noteOnTime < oldestTime) {
-        oldest = i;
-        oldestTime = voices[i].noteOnTime;
-      }
+      if (voices[i].noteOnTime < oldestTime) { oldest = i; oldestTime = voices[i].noteOnTime; }
     }
     return oldest;
   }
 
+  // Propagate patch-level params to all voices
+  void applyOsc2ToVoices() {
+    for (int i = 0; i < MAX_VOICES; i++) {
+      voices[i].osc2DetuneRatio = 1.0f + osc2Detune;
+      voices[i].osc2SemiOffset  = osc2Semitones;
+    }
+  }
+
 public:
+  ZombieEffects fx;  // chorus/delay/reverb chain
+
   SynthEngine() {
-    masterVolume = 0.5f;
-    osc1Level = 0.5f;
-    osc2Level = 0.5f;
-    osc2Detune = 0.005f;
-    osc2Semitones = 0.0f;
-    lfoRate = 5.0f;
-    lfoDepth = 0.0f;
-    lfoPhase = 0.0f;
+    masterVolume       = 0.5f;
+    osc1Level          = 0.5f;
+    osc2Level          = 0.5f;
+    osc2Detune         = 0.005f;
+    osc2Semitones      = 0.0f;
+    globalLfoFilterMod = 0.0f;
+    globalLfoPitchMod  = 1.0f;
+    globalLfoAmpMod    = 0.0f;
+    globalLfoPWMod     = 0.0f;
+    globalPitchBendRatio = 1.0f;
+    globalAftertouch   = 0.0f;
   }
 
   void init() {
-    for (int i = 0; i < MAX_VOICES; i++) {
-      voices[i].init();
-    }
+    for (int i = 0; i < MAX_VOICES; i++) voices[i].init();
+    fx.init();
     reinitOutput();
+  }
+
+  // ── LFO routing (called from ZombieSynth.ino LFO tick) ───────────────────
+  void setLFOFilterMod(float v) {
+    globalLfoFilterMod = v;
+    for (int i = 0; i < MAX_VOICES; i++) voices[i].lfoFilterMod = v * 0.3f;
+  }
+  void setLFOPitchMod(float v) {
+    // v = -1..+1 depth in semitones (±2 semitones max)
+    float ratio = powf(2.0f, v * 2.0f / 12.0f);
+    globalLfoPitchMod = ratio;
+    for (int i = 0; i < MAX_VOICES; i++) voices[i].lfoPitchMod = ratio;
+  }
+  void setLFOAmpMod(float v) {
+    globalLfoAmpMod = v;
+    for (int i = 0; i < MAX_VOICES; i++) voices[i].lfoAmpMod = fabsf(v);
+  }
+  void setLFOResonanceMod(float v) {
+    // v = -1..+1 mapped to resonance offset
+    float res = voices[0].filter.resonance + v * 0.3f;
+    res = constrain(res, 0.0f, 0.95f);
+    for (int i = 0; i < MAX_VOICES; i++) voices[i].filter.setResonance(res);
+  }
+  void setLFOPWMod(float v) {
+    // v = -1..+1; modulates pulse width of osc1
+    globalLfoPWMod = v;
+    float pw = 0.5f + v * 0.3f;
+    pw = constrain(pw, 0.05f, 0.95f);
+    for (int i = 0; i < MAX_VOICES; i++) voices[i].osc1.setPulseWidth(pw);
+  }
+  void setLFODetuneMod(float v) {
+    // v = -1..+1; modulates osc2 detune ratio
+    float detune = osc2Detune + v * 0.01f;
+    for (int i = 0; i < MAX_VOICES; i++) voices[i].osc2DetuneRatio = 1.0f + detune;
+  }
+
+  // ── Pitch bend (MIDI pitch bend, ±2 semitones default) ───────────────────
+  void setPitchBend(int16_t bendVal) {
+    // bendVal: -8192 to +8192
+    float semitones = (bendVal / 8192.0f) * 2.0f;  // ±2 semitones
+    globalPitchBendRatio = powf(2.0f, semitones / 12.0f);
+    for (int i = 0; i < MAX_VOICES; i++) voices[i].pitchBendRatio = globalPitchBendRatio;
+  }
+
+  // ── Channel aftertouch → filter cutoff boost ──────────────────────────────
+  void setChannelAftertouch(uint8_t val) {
+    globalAftertouch = val / 127.0f;
+    for (int i = 0; i < MAX_VOICES; i++) voices[i].aftertouchMod = globalAftertouch;
+  }
+
+  float getOsc2Detune() { return osc2Detune; }
+  float getOsc2Semitones() { return osc2Semitones; }
+  float getMasterVolume() { return masterVolume; }
+  float getFilterCutoff() { return (MAX_VOICES > 0) ? voices[0].filter.cutoff : 0.5f; }
+  float getFilterResonance() { return (MAX_VOICES > 0) ? voices[0].filter.resonance : 0.3f; }
+  float getBaseCutoff() { return (MAX_VOICES > 0) ? voices[0].baseCutoff : 0.8f; }
+
+  void setOsc2Detune(float d) {
+    osc2Detune = d;
+    applyOsc2ToVoices();
+  }
+  void setOsc2Semitones(float s) {
+    osc2Semitones = s;
+    applyOsc2ToVoices();
   }
 
   // Call after changing audioOutputMode to switch DAC route
@@ -511,9 +639,10 @@ public:
     }
   }
 
-  // Update filter for all voices
+  // Update filter for all voices (also stores baseCutoff for LFO/AT modulation)
   void setFilterCutoff(float cutoff) {
     for (int i = 0; i < MAX_VOICES; i++) {
+      voices[i].baseCutoff = cutoff;
       voices[i].filter.setCutoff(cutoff);
     }
   }
@@ -547,8 +676,10 @@ public:
     masterVolume = constrain(vol, 0.0f, 1.0f);
   }
 
-  // Audio generation - call this frequently from core task
+  // Audio generation - called from Core 0 audio task
   void processAudio() {
+    float scale = (audioOutputMode == AUDIO_SPEAKER) ? 0.5f : 0.3f;
+
     for (int i = 0; i < BUFFER_SIZE; i++) {
       float mixL = 0.0f;
       float mixR = 0.0f;
@@ -562,26 +693,26 @@ public:
         }
       }
 
-      // Apply master volume and convert to 16-bit
-      float scale = (audioOutputMode == AUDIO_SPEAKER) ? 0.5f : 0.3f;
+      // Master volume
       mixL *= masterVolume * scale;
       mixR *= masterVolume * scale;
 
+      // FX chain (chorus → delay → reverb)
+      float fxL, fxR;
+      fx.process(mixL, mixR, fxL, fxR);
+
       if (audioOutputMode == AUDIO_PCM5052) {
-        // Signed 16-bit for external DAC
-        audioBuffer[i * 2]     = (int16_t)(constrain(mixL, -1.0f, 1.0f) * 32767.0f);
-        audioBuffer[i * 2 + 1] = (int16_t)(constrain(mixR, -1.0f, 1.0f) * 32767.0f);
+        audioBuffer[i * 2]     = (int16_t)(constrain(fxL, -1.0f, 1.0f) * 32767.0f);
+        audioBuffer[i * 2 + 1] = (int16_t)(constrain(fxR, -1.0f, 1.0f) * 32767.0f);
       } else {
         // Internal DAC: unsigned 8-bit in high byte; GPIO26 = right channel
-        // I2S_DAC_CHANNEL_RIGHT_EN → right channel (i*2+1 word) drives GPIO26
-        uint16_t dacVal = (uint16_t)((constrain(mixR, -1.0f, 1.0f) + 1.0f) * 127.5f);
+        uint16_t dacVal = (uint16_t)((constrain(fxR, -1.0f, 1.0f) + 1.0f) * 127.5f);
         dacVal &= 0xFF;
-        audioBuffer[i * 2]     = (int16_t)(dacVal << 8);  // left (unused in right-only mode)
-        audioBuffer[i * 2 + 1] = (int16_t)(dacVal << 8);  // right → GPIO26
+        audioBuffer[i * 2]     = (int16_t)(dacVal << 8);
+        audioBuffer[i * 2 + 1] = (int16_t)(dacVal << 8);
       }
     }
 
-    // Send to I2S
     size_t bytes_written;
     i2s_write(I2S_NUM, audioBuffer, sizeof(audioBuffer), &bytes_written, portMAX_DELAY);
   }

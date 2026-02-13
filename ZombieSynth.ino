@@ -1,19 +1,25 @@
 /*******************************************************************
- ZOMBIE SS PROPHET-8 SYNTHESIZER  v2
+ ZOMBIE SS PROPHET-8 SYNTHESIZER  v3
  Prophet-8 inspired polyBLEP synth for ESP32 CYD
 
- v2 Features:
+ v3 Features:
  - 8-voice polyphony with polyBLEP oscillators
- - State variable filter with ADSR envelopes
- - LFO (sine/tri/saw/square/S&H) targeting filter/pitch/amp
+ - 7 waveforms: SAW / SQR / TRI / SIN / PUL / NOISE / SUPERSAW
+ - State variable filter with ADSR envelopes + channel aftertouch
+ - Pitch bend (±2 semitones, MIDI E0 message)
+ - LFO (6 targets: FILTER/PITCH/AMP/RESONANCE/PW/DETUNE)
+ - FX chain: Chorus → Ping-Pong Delay → Freeverb Reverb
  - 50-pattern arpeggiator with BPM ±1/±10 controls
- - 16-step sequencer with per-track sound select (4 tracks)
- - Presets: 10 factory + 10 user (NVS persistent via Preferences)
+ - Commercial-grade 16-step sequencer (per-step note/vel/gate/prob/tie)
+ - Per-track: MIDI ch, output routing (INT/EXT/BOTH), polyrhythm
+ - MIDI clock sync: BPM derived from incoming 24PPQN clock (GPIO 35)
+ - Presets: 10 factory + 10 user (NVS persistent)
  - On-screen QWERTY for preset naming
- - Chord Pad: 8 chord types × 12 roots (bonus feature)
- - Note name display as notes are played
- - USB and 5-pin DIN MIDI input (GPIO 35)
- - PCM5052 DAC output (I2S) on GPIO 22/27/17
+ - Chord Pad: 8 chord types × 12 roots
+ - Audio output selection: PCM5052 / Internal DAC / Speaker
+ - PCM5052 external I2S DAC (GPIO 22/27/17)
+ - Internal DAC → SC8002B amp → onboard speaker header (GPIO 26)
+ - SD card framework (GPIO 5/18/19/23)
  *******************************************************************/
 
 #include <SPI.h>
@@ -147,7 +153,60 @@ void onMIDICC(uint8_t channel, uint8_t cc, uint8_t value) {
   }
 }
 
-void onMIDIPitchBend(uint8_t channel, int16_t bend) {}
+void onMIDIPitchBend(uint8_t channel, int16_t bend) {
+  SynthEngine* synth = getZombieSynth();
+  if (synth) synth->setPitchBend(bend);
+}
+
+void onMIDIAftertouch(uint8_t channel, uint8_t val) {
+  SynthEngine* synth = getZombieSynth();
+  if (synth) synth->setChannelAftertouch(val);
+}
+
+void onMIDIPolyAT(uint8_t channel, uint8_t note, uint8_t val) {
+  // Polyphonic aftertouch: treat as channel AT for simplicity
+  // (full per-voice AT would require per-note voice lookup)
+  SynthEngine* synth = getZombieSynth();
+  if (synth) synth->setChannelAftertouch(val);
+}
+
+// MIDI clock sync — called on every 0xF8 tick from MIDI IN
+// Sync sequencer and/or arp BPM when external clock is received
+static bool midiClockSyncEnabled = false;  // Can be toggled from a UI setting
+static uint8_t midiClockTickCount = 0;
+
+void onMIDIClock() {
+  if (!midiClockSyncEnabled) return;
+  midiClockTickCount++;
+  // Sync every 24 ticks (= 1 quarter note @ 24PPQN)
+  if (midiClockTickCount >= 24) {
+    midiClockTickCount = 0;
+    float bpm = midiInput.getClockBPM();
+    if (bpm > 20.0f && bpm < 400.0f) {
+      ZombieSequencer* seq = getZombieSeq();
+      Arpeggiator*     arp = getZombieArp();
+      if (seq) seq->setBPM(bpm);
+      if (arp) arp->setBPM(bpm);
+    }
+  }
+}
+
+void onMIDIStart() {
+  ZombieSequencer* seq = getZombieSeq();
+  Arpeggiator*     arp = getZombieArp();
+  midiClockTickCount = 0;
+  if (seq && !seq->getIsPlaying()) seq->play();
+}
+
+void onMIDIStop() {
+  ZombieSequencer* seq = getZombieSeq();
+  if (seq && seq->getIsPlaying()) seq->stop();
+}
+
+void onMIDIContinue() {
+  ZombieSequencer* seq = getZombieSeq();
+  if (seq && !seq->getIsPlaying()) seq->play();
+}
 
 // ── Audio task (Core 0) ────────────────────────────────────────────────────
 void audioTask(void* parameter) {
@@ -195,7 +254,7 @@ void drawMenu() {
   tft.setTextColor(THEME_PRIMARY, THEME_BG);
   tft.drawCentreString("ZOMBIE SS", 160, 8, 4);
   tft.setTextColor(THEME_ACCENT, THEME_BG);
-  tft.drawCentreString("PROPHET SYNTHESIZER  v2", 160, 38, 2);
+  tft.drawCentreString("PROPHET SYNTHESIZER  v3", 160, 38, 2);
 
   // Status line
   SynthEngine* synth = getZombieSynth();
@@ -206,7 +265,7 @@ void drawMenu() {
     tft.drawRightString(buf, 314, 68, 2);
   }
   tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
-  tft.drawString("v2.0", 6, 68, 2);
+  tft.drawString("v3.0", 6, 68, 2);
 
   // App icons
   for (int i = 0; i < NUM_APPS; i++) {
@@ -282,7 +341,7 @@ void sdEndAccess() {
 // ── Setup ──────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
-  Serial.println("ZOMBIE SS v2 — initializing");
+  Serial.println("ZOMBIE SS v3 — initializing");
 
   // ── SD card FIRST (before VSPI is remapped for touch) ───────────────────
   // After this block, sdSPI.end() frees the VSPI for touch remapping.
@@ -311,7 +370,7 @@ void setup() {
   tft.setTextColor(THEME_PRIMARY, THEME_BG);
   tft.drawCentreString("ZOMBIE SS", 160, 75, 4);
   tft.setTextColor(THEME_ACCENT, THEME_BG);
-  tft.drawCentreString("PROPHET SYNTHESIZER v2", 160, 112, 2);
+  tft.drawCentreString("PROPHET SYNTHESIZER v3", 160, 112, 2);
   tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
   tft.drawCentreString(sdCardAvailable ? "SD card ready" : "No SD card", 160, 130, 2);
   tft.drawCentreString("Initializing audio...", 160, 148, 2);
@@ -336,6 +395,12 @@ void setup() {
   midiInput.setNoteOffCallback(onMIDINoteOff);
   midiInput.setCCCallback(onMIDICC);
   midiInput.setPitchBendCallback(onMIDIPitchBend);
+  midiInput.setAftertouchCallback(onMIDIAftertouch);
+  midiInput.setPolyATCallback(onMIDIPolyAT);
+  midiInput.setClockCallback(onMIDIClock);
+  midiInput.setStartCallback(onMIDIStart);
+  midiInput.setStopCallback(onMIDIStop);
+  midiInput.setContinueCallback(onMIDIContinue);
   Serial.println("MIDI OK");
 
   // Audio task on Core 0 (priority 24)
@@ -365,19 +430,32 @@ void loop() {
 
     SynthEngine* synth = getZombieSynth();
     if (synth && globalLFO.enabled) {
-      float out = globalLFO.output;
+      float out = globalLFO.output; // -1..+1 already depth-scaled
       switch (globalLFO.target) {
         case LFO_TARGET_FILTER:
-          synth->setFilterCutoff(constrain(synthParams.filterCutoff + out * 0.5f, 0.0f, 1.0f));
-          break;
-        case LFO_TARGET_AMP:
-          synth->setMasterVolume(constrain(synthParams.masterVolume + out * 0.3f, 0.0f, 1.0f));
+          synth->setLFOFilterMod(out);
           break;
         case LFO_TARGET_PITCH:
-          // Vibrato: wobble filter slightly for pseudo-pitch effect
-          synth->setFilterCutoff(constrain(synthParams.filterCutoff + out * 0.15f, 0.0f, 1.0f));
+          synth->setLFOPitchMod(out);
+          break;
+        case LFO_TARGET_AMP:
+          synth->setLFOAmpMod(out);
+          break;
+        case LFO_TARGET_RESONANCE:
+          synth->setLFOResonanceMod(out);
+          break;
+        case LFO_TARGET_PW:
+          synth->setLFOPWMod(out);
+          break;
+        case LFO_TARGET_DETUNE:
+          synth->setLFODetuneMod(out);
           break;
       }
+    } else if (synth) {
+      // LFO disabled: reset all LFO mods to neutral
+      synth->setLFOFilterMod(0.0f);
+      synth->setLFOPitchMod(0.0f);
+      synth->setLFOAmpMod(0.0f);
     }
   }
 
