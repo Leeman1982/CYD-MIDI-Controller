@@ -6,6 +6,9 @@
 #include "synth_engine.h"
 #include "zombie_lfo.h"
 
+// forward declared in ZombieSynth.ino — allows SAVE button to navigate
+void enterMode(AppMode mode);
+
 // ZOMBIE SS Prophet-8 Style Synthesizer UI
 // Black background, red text, white outlines
 
@@ -95,36 +98,52 @@ static const int TAB_W = 58, TAB_H = 22, TAB_Y = 55;
 static const int TAB_X[] = {5, 65, 125, 185, 245};
 static const char* TAB_NAMES[] = {"OSC", "FLTR", "AMP", "F.ENV", "LFO"};
 
+static const char* audioOutNames[] = {"PCM5052","INT DAC","SPEAKER"};
+
 void drawZombieHeader() {
   tft.fillRect(0, 0, 320, 50, THEME_BG);
   tft.drawRect(0, 0, 320, 50, THEME_OUTLINE);
   tft.drawRect(1, 1, 318, 48, THEME_OUTLINE);
 
+  // Title (centre-left area, font 4 to leave room for buttons)
   tft.setTextColor(THEME_PRIMARY, THEME_BG);
-  tft.drawString("ZOMBIE SS", 95, 8, 6);
+  tft.drawCentreString("ZOMBIE SS", 160, 5, 4);
   tft.setTextColor(THEME_ACCENT, THEME_BG);
-  tft.drawString("PROPHET SYNTH", 90, 35, 2);
+  tft.drawCentreString("PROPHET SYNTHESIZER", 160, 33, 2);
 
-  // BACK button
-  tft.fillRoundRect(5, 5, 55, 20, 4, THEME_PRIMARY);
-  tft.drawRoundRect(5, 5, 55, 20, 4, THEME_OUTLINE);
+  // ── Left: BACK / SAVE ────────────────────────────────────────────────────
+  tft.fillRoundRect(3, 3, 50, 21, 3, THEME_PRIMARY);
+  tft.drawRoundRect(3, 3, 50, 21, 3, THEME_OUTLINE);
   tft.setTextColor(THEME_BG, THEME_PRIMARY);
-  tft.drawString("BACK", 15, 8, 2);
+  tft.drawCentreString("BACK", 28, 8, 2);
 
-  // Note name display (top-right corner)
-  tft.fillRect(270, 33, 48, 14, THEME_BG);
-  tft.setTextColor(THEME_ACCENT, THEME_BG);
+  tft.fillRoundRect(3, 27, 50, 20, 3, THEME_ACCENT);
+  tft.drawRoundRect(3, 27, 50, 20, 3, THEME_OUTLINE);
+  tft.setTextColor(THEME_BG, THEME_ACCENT);
+  tft.drawCentreString("SAVE", 28, 32, 2);
+
+  // ── Right: Note name / OUT button ────────────────────────────────────────
+  // Note name (top-right)
   char noteBuf[8];
-  snprintf(noteBuf, sizeof(noteBuf), " %s", midiNoteToName(lastPlayedMidiNote));
-  tft.drawRightString(noteBuf, 316, 34, 2);
+  snprintf(noteBuf, sizeof(noteBuf), "%s", midiNoteToName(lastPlayedMidiNote));
+  tft.setTextColor(THEME_ACCENT, THEME_BG);
+  tft.drawRightString(noteBuf, 316, 5, 2);
 
   // Voice count
   if (zombieSynth) {
-    char buf[8];
-    sprintf(buf, "%d/8V", zombieSynth->getActiveVoiceCount());
+    char vbuf[8];
+    sprintf(vbuf, "%d/8V", zombieSynth->getActiveVoiceCount());
     tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
-    tft.drawRightString(buf, 316, 49, 2);
+    tft.drawRightString(vbuf, 316, 20, 2);
   }
+
+  // Audio output selector (tap to cycle)
+  uint16_t outBg = (audioOutputMode == AUDIO_PCM5052) ? THEME_PRIMARY :
+                   (audioOutputMode == AUDIO_INTERNAL_DAC) ? 0x07E0 /* green */ : THEME_ACCENT;
+  tft.fillRoundRect(259, 30, 58, 17, 3, outBg);
+  tft.drawRoundRect(259, 30, 58, 17, 3, THEME_OUTLINE);
+  tft.setTextColor(THEME_BG, outBg);
+  tft.drawCentreString(audioOutNames[audioOutputMode], 288, 34, 2);
 
   // 5 page tabs
   for (int i = 0; i < 5; i++) {
@@ -300,7 +319,23 @@ void zombieSynthDraw() {
 void zombieSynthHandleTouch() {
   if (!touch.justPressed && !touch.isPressed) return;
 
-  if (touch.justPressed && isButtonPressed(5, 5, 55, 20)) { exitToMenu(); return; }
+  // BACK button
+  if (touch.justPressed && isButtonPressed(3, 3, 50, 21)) { exitToMenu(); return; }
+
+  // SAVE button → navigate to preset page
+  if (touch.justPressed && isButtonPressed(3, 27, 50, 20)) {
+    enterMode(ZOMBIE_PRESETS);
+    return;
+  }
+
+  // AUDIO OUTPUT button → cycle PCM5052 → INT DAC → SPEAKER
+  if (touch.justPressed && isButtonPressed(259, 30, 58, 17)) {
+    audioOutputMode = (AudioOutputMode)((audioOutputMode + 1) % 3);
+    SynthEngine* s = getZombieSynth();
+    if (s) s->reinitOutput();
+    synthParams.needsRedraw = true;
+    return;
+  }
 
   // Page tabs
   if (touch.justPressed) {

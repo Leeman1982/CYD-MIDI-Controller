@@ -19,6 +19,7 @@
 #include <SPI.h>
 #include <XPT2046_Touchscreen.h>
 #include <TFT_eSPI.h>
+#include <SD.h>
 
 // Core engine and input
 #include "synth_engine.h"
@@ -56,6 +57,16 @@ MIDIInput  midiInput;
 MIDIOutput midiOut;
 TouchState touch;
 AppMode    currentMode = MENU;
+
+// Audio output mode (referenced by synth_engine.h extern)
+// Default: PCM5052 external DAC.  Change via Synth → OUT button.
+AudioOutputMode audioOutputMode = AUDIO_PCM5052;
+
+// SD card — onboard slot uses VSPI default pins (free from touch/display)
+// SD_CS=GPIO5  SD_SCK=GPIO18  SD_MISO=GPIO19  SD_MOSI=GPIO23
+#define SD_CS_PIN 5
+SPIClass sdSPI(VSPI);
+bool sdCardAvailable = false;
 
 // Global LFO shared across all modes
 LFOEngine globalLFO;
@@ -208,8 +219,13 @@ void drawMenu() {
     tft.drawCentreString(apps[i].name,   x + ICON_W/2, y + 40, 2);
   }
 
+  // SD / audio output status line at bottom
   tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
-  tft.drawCentreString("TAP TO SELECT MODE", 160, 228, 2);
+  char statusLine[60];
+  snprintf(statusLine, sizeof(statusLine), "SD:%s  OUT:%s",
+           sdCardAvailable ? "OK" : "--",
+           audioOutNames[audioOutputMode]);
+  tft.drawCentreString(statusLine, 160, 228, 2);
 }
 
 void enterMode(AppMode mode) {
@@ -245,12 +261,42 @@ void exitToMenu() {
   enterMode(MENU);
 }
 
+// ── SD card SPI helpers ────────────────────────────────────────────────────
+// The onboard SD slot uses VSPI default pins (GPIO 18/19/23/5).
+// Touch SPI also uses VSPI but remapped to GPIO 25/32/33/39.
+// Both cannot run simultaneously on VSPI — swap as needed.
+//
+void sdBeginAccess() {
+  // Pause audio, release touch VSPI, configure VSPI for SD
+  if (audioTaskHandle) vTaskSuspend(audioTaskHandle);
+  mySpi.end();
+  sdSPI.begin(18, 19, 23, SD_CS_PIN);  // SCK MISO MOSI CS
+}
+void sdEndAccess() {
+  // Release SD VSPI, restore touch VSPI, resume audio
+  sdSPI.end();
+  mySpi.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
+  if (audioTaskHandle) vTaskResume(audioTaskHandle);
+}
+
 // ── Setup ──────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
   Serial.println("ZOMBIE SS v2 — initializing");
 
-  // Touch SPI
+  // ── SD card FIRST (before VSPI is remapped for touch) ───────────────────
+  // After this block, sdSPI.end() frees the VSPI for touch remapping.
+  sdSPI.begin(18, 19, 23, SD_CS_PIN);   // VSPI default: SCK MISO MOSI CS
+  if (SD.begin(SD_CS_PIN, sdSPI)) {
+    sdCardAvailable = true;
+    if (!SD.exists("/ZOMBIESS")) SD.mkdir("/ZOMBIESS");
+    Serial.printf("SD card OK (%llu MB)\n", SD.cardSize() / (1024*1024));
+  } else {
+    Serial.println("No SD card");
+  }
+  sdSPI.end();  // Free VSPI so touch can remap it below
+
+  // ── Touch SPI (VSPI remapped to GPIO 25/39/32/33) ───────────────────────
   mySpi.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
   ts.begin(mySpi);
   ts.setRotation(1);
@@ -267,6 +313,7 @@ void setup() {
   tft.setTextColor(THEME_ACCENT, THEME_BG);
   tft.drawCentreString("PROPHET SYNTHESIZER v2", 160, 112, 2);
   tft.setTextColor(THEME_TEXT_DIM, THEME_BG);
+  tft.drawCentreString(sdCardAvailable ? "SD card ready" : "No SD card", 160, 130, 2);
   tft.drawCentreString("Initializing audio...", 160, 148, 2);
   delay(800);
 

@@ -13,13 +13,40 @@
 #define TWO_PI 6.28318530718f
 #define MIDI_NOTE_COUNT 128
 
-// Audio output configuration for PCM5052 DAC
-// Note: If using onboard speaker (P4 connector), GPIO26 controls SC8002B amp
-// For external I2S DAC, use these free GPIOs:
-#define I2S_NUM I2S_NUM_0
-#define I2S_BCK_PIN 22      // Bit clock (CN1 connector)
-#define I2S_WS_PIN 27       // Word select/LRCLK (CN1 connector)
-#define I2S_DATA_PIN 17     // Data out (requires RGB LED removal or can cause conflicts)
+// ── Audio output configuration ────────────────────────────────────────────────
+//
+//  CYD (ESP32-2432S028R) pin audit:
+//  Display HSPI : GPIO 2(DC) 12(MISO) 13(MOSI) 14(SCK) 15(CS) 21(BL)
+//  Touch VSPI   : GPIO 25(CLK) 32(MOSI) 33(CS) 36(IRQ) 39(MISO)
+//  RGB LED      : GPIO 4(Blue) 16(Green) 17(Red) ← not driven in our code
+//  SD Card slot : GPIO 5(CS) 18(SCK) 19(MISO) 23(MOSI)   ← all free
+//  Internal DAC : GPIO 26 (DAC2 → SC8002B amp → P4 speaker header)
+//                 GPIO 25 (DAC1, in use by touch SPI — avoid)
+//  MIDI IN RX   : GPIO 35  (input-only pin — perfect for UART RX)
+//  MIDI OUT TX  : GPIO 4   (shares RGB-LED blue trace; LED not driven — OK)
+//
+//  PCM5052 external I2S DAC pins (wired to CN1 header or breakout):
+//    GPIO 22 → BCLK   (free, not used by display or touch)
+//    GPIO 27 → LRCLK  (free)
+//    GPIO 17 → DOUT   (shares RGB-LED red trace; LED not driven — OK)
+//
+//  Internal DAC mode (no external hardware):
+//    GPIO 26 → SC8002B amp input → P4 speaker header (onboard)
+//    Quality: 8-bit, mono.  Good for monitoring / built-in speaker.
+
+#define I2S_NUM      I2S_NUM_0
+#define I2S_BCK_PIN  22    // BCLK  → PCM5052 pin 3
+#define I2S_WS_PIN   27    // LRCLK → PCM5052 pin 4
+#define I2S_DATA_PIN 17    // DIN   → PCM5052 pin 5  (GPIO17 = RGB-LED red, not driven)
+#define I2S_DAC_GPIO 26    // ESP32 internal DAC2 → SC8002B amp → speaker header
+
+// Audio output mode (set via zombie_synth_mode.h UI, defined in ZombieSynth.ino)
+enum AudioOutputMode {
+  AUDIO_PCM5052      = 0,  // External 24-bit I2S DAC — best quality
+  AUDIO_INTERNAL_DAC = 1,  // Onboard 8-bit DAC on GPIO26 — no extra hardware
+  AUDIO_SPEAKER      = 2   // Same as INTERNAL_DAC, labelled for built-in speaker
+};
+extern AudioOutputMode audioOutputMode;
 
 // Waveform types
 enum WaveformType {
@@ -393,32 +420,61 @@ public:
     for (int i = 0; i < MAX_VOICES; i++) {
       voices[i].init();
     }
+    reinitOutput();
+  }
 
-    // Configure I2S for PCM5052 DAC
-    i2s_config_t i2s_config = {
-      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-      .sample_rate = SAMPLE_RATE,
-      .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-      .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-      .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-      .dma_buf_count = 8,
-      .dma_buf_len = BUFFER_SIZE,
-      .use_apll = true,
-      .tx_desc_auto_clear = true,
-      .fixed_mclk = 0
-    };
+  // Call after changing audioOutputMode to switch DAC route
+  void reinitOutput() {
+    i2s_driver_uninstall(I2S_NUM);
 
-    i2s_pin_config_t pin_config = {
-      .bck_io_num = I2S_BCK_PIN,
-      .ws_io_num = I2S_WS_PIN,
-      .data_out_num = I2S_DATA_PIN,
-      .data_in_num = I2S_PIN_NO_CHANGE
-    };
+    if (audioOutputMode == AUDIO_PCM5052) {
+      // ── External PCM5052 I2S DAC (GPIO 22/27/17) ──────────────────────────
+      i2s_config_t cfg = {
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+        .sample_rate = SAMPLE_RATE,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = 8,
+        .dma_buf_len = BUFFER_SIZE,
+        .use_apll = true,
+        .tx_desc_auto_clear = true,
+        .fixed_mclk = 0
+      };
+      i2s_driver_install(I2S_NUM, &cfg, 0, NULL);
+      i2s_pin_config_t pins = {
+        .bck_io_num   = I2S_BCK_PIN,
+        .ws_io_num    = I2S_WS_PIN,
+        .data_out_num = I2S_DATA_PIN,
+        .data_in_num  = I2S_PIN_NO_CHANGE
+      };
+      i2s_set_pin(I2S_NUM, &pins);
+      i2s_set_clk(I2S_NUM, SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
+      Serial.println("Audio: PCM5052 DAC (GPIO 22/27/17)");
 
-    i2s_driver_install(I2S_NUM, &i2s_config, 0, NULL);
-    i2s_set_pin(I2S_NUM, &pin_config);
-    i2s_set_clk(I2S_NUM, SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
+    } else {
+      // ── Internal DAC on GPIO26 (SC8002B amp → onboard speaker) ───────────
+      // Same path for AUDIO_INTERNAL_DAC and AUDIO_SPEAKER
+      i2s_config_t cfg = {
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_DAC_BUILT_IN),
+        .sample_rate = SAMPLE_RATE,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+        .communication_format = I2S_COMM_FORMAT_STAND_MSB,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = 8,
+        .dma_buf_len = BUFFER_SIZE,
+        .use_apll = false,
+        .tx_desc_auto_clear = true,
+        .fixed_mclk = 0
+      };
+      i2s_driver_install(I2S_NUM, &cfg, 0, NULL);
+      // Route DAC2 (right channel → GPIO26 → SC8002B amp)
+      i2s_set_dac_mode(I2S_DAC_CHANNEL_RIGHT_EN);
+      i2s_set_clk(I2S_NUM, SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
+      Serial.printf("Audio: Internal DAC on GPIO%d (SC8002B amp)\n", I2S_DAC_GPIO);
+    }
   }
 
   void noteOn(int note, int velocity) {
@@ -507,11 +563,22 @@ public:
       }
 
       // Apply master volume and convert to 16-bit
-      mixL *= masterVolume * 0.3f; // Scale down to prevent clipping
-      mixR *= masterVolume * 0.3f;
+      float scale = (audioOutputMode == AUDIO_SPEAKER) ? 0.5f : 0.3f;
+      mixL *= masterVolume * scale;
+      mixR *= masterVolume * scale;
 
-      audioBuffer[i * 2] = (int16_t)(constrain(mixL, -1.0f, 1.0f) * 32767.0f);
-      audioBuffer[i * 2 + 1] = (int16_t)(constrain(mixR, -1.0f, 1.0f) * 32767.0f);
+      if (audioOutputMode == AUDIO_PCM5052) {
+        // Signed 16-bit for external DAC
+        audioBuffer[i * 2]     = (int16_t)(constrain(mixL, -1.0f, 1.0f) * 32767.0f);
+        audioBuffer[i * 2 + 1] = (int16_t)(constrain(mixR, -1.0f, 1.0f) * 32767.0f);
+      } else {
+        // Internal DAC: unsigned 8-bit in high byte; GPIO26 = right channel
+        // I2S_DAC_CHANNEL_RIGHT_EN → right channel (i*2+1 word) drives GPIO26
+        uint16_t dacVal = (uint16_t)((constrain(mixR, -1.0f, 1.0f) + 1.0f) * 127.5f);
+        dacVal &= 0xFF;
+        audioBuffer[i * 2]     = (int16_t)(dacVal << 8);  // left (unused in right-only mode)
+        audioBuffer[i * 2 + 1] = (int16_t)(dacVal << 8);  // right → GPIO26
+      }
     }
 
     // Send to I2S

@@ -13,6 +13,11 @@ extern LFOEngine globalLFO;
 void applySynthPatch(const SynthPatch& p);
 void collectSynthPatch(SynthPatch& p, const char* name);
 
+// SD card access (defined in ZombieSynth.ino)
+extern bool sdCardAvailable;
+void sdBeginAccess();
+void sdEndAccess();
+
 static PresetManager presetMgr;
 static int   presetSelected   = 0;
 static int   presetPage       = 0;   // 0=factory, 1=user
