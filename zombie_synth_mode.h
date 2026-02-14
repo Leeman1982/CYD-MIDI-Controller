@@ -11,6 +11,9 @@ void enterMode(AppMode mode);
 
 static SynthEngine* zombieSynth = NULL;
 
+// forward declaration (defined at bottom of this file)
+SynthEngine* getZombieSynth();
+
 struct ZombieSynthParams {
   int   osc1Wave;
   float osc1Level;
