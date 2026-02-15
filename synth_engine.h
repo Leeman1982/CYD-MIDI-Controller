@@ -483,6 +483,7 @@ private:
 
 public:
   ZombieEffects fx;  // chorus/delay/reverb chain
+  volatile bool reinitInProgress = false;  // Set during output mode switch to prevent i2s_write race
 
   SynthEngine() {
     masterVolume       = 0.5f;
@@ -569,11 +570,14 @@ public:
   }
 
   // Call after changing audioOutputMode to switch DAC route.
-  // Must suspend the audio task first — i2s_driver_uninstall() from Core 1
-  // while Core 0 is inside i2s_write() corrupts the driver and causes glitches.
+  // Uses reinitInProgress flag (not vTaskSuspend) to safely stop i2s_write:
+  //   vTaskSuspend while the task is blocked on a DMA semaphore causes the audio
+  //   task to hang permanently after i2s_driver_uninstall() deletes that semaphore.
+  //   Instead we set the flag → processAudio() returns early → brief pause →
+  //   then we uninstall, reconfigure, and clear the flag.
   void reinitOutput() {
-    extern TaskHandle_t audioTaskHandle;
-    if (audioTaskHandle) vTaskSuspend(audioTaskHandle);
+    reinitInProgress = true;
+    vTaskDelay(pdMS_TO_TICKS(25));  // Allow current processAudio() / i2s_write() to finish
 
     i2s_driver_uninstall(I2S_NUM);
 
@@ -626,7 +630,7 @@ public:
       Serial.printf("Audio: Internal DAC on GPIO%d (SC8002B amp)\n", I2S_DAC_GPIO);
     }
 
-    if (audioTaskHandle) vTaskResume(audioTaskHandle);
+    reinitInProgress = false;  // Audio task resumes automatically
   }
 
   void noteOn(int note, int velocity) {
@@ -702,7 +706,12 @@ public:
 
   // Audio generation - called from Core 0 audio task
   void processAudio() {
-    float scale = (audioOutputMode == AUDIO_SPEAKER) ? 0.5f : 0.3f;
+    // Yield during output reinit so i2s_write() isn't called on a dying driver.
+    // reinitInProgress is set by reinitOutput() on Core 1 before uninstalling.
+    if (reinitInProgress) { vTaskDelay(1); return; }
+
+    // Boost volume for internal DAC/speaker: SC8002B needs more headroom than PCM5052.
+    float scale = (audioOutputMode == AUDIO_PCM5052) ? 0.3f : 0.65f;
 
     for (int i = 0; i < BUFFER_SIZE; i++) {
       float mixL = 0.0f;

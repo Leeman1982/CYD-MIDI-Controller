@@ -64,8 +64,8 @@ const SynthPatch factoryPresets[NUM_FACTORY] = {
    0.008f, 0.1f, 0.6f, 0.15f,
    0, 6.0f, 0.05f, 1, 0.75f},
 
-  // 3: ZOMBIE PLUCK
-  {"ZOMBIE PLUCK",  WAVE_SAW, 0.9f, WAVE_SQUARE, 0.3f, 0.004f,
+  // 3: ZOMBI PLUCK
+  {"ZOMBI PLUCK",  WAVE_SAW, 0.9f, WAVE_SQUARE, 0.3f, 0.004f,
    FILTER_LOWPASS, 0.9f, 0.45f, 0.95f,
    0.003f, 0.35f, 0.0f, 0.15f,
    0.003f, 0.2f, 0.0f, 0.1f,

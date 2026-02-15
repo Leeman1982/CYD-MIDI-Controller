@@ -91,7 +91,7 @@ void drawSeqMain(bool fullRedraw) {
     tft.fillRect(0, 0, 320, 30, THEME_SURFACE);
     tft.drawRect(0, 0, 320, 30, THEME_OUTLINE);
     tft.setTextColor(THEME_PRIMARY, THEME_SURFACE);
-    tft.drawCentreString("ZOMBIE SEQ", 160, 6, 4);
+    tft.drawCentreString("ZOMBI SEQ", 160, 6, 4);
 
     // BACK button
     tft.fillRoundRect(2, 2, 42, 26, 3, THEME_BG);

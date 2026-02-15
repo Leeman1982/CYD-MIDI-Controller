@@ -1,5 +1,5 @@
 /*******************************************************************
- ZOMBIE SS PROPHET-8 SYNTHESIZER  v3
+ ZOMBI SS PROPHET-8 SYNTHESIZER  v3
  Prophet-8 inspired polyBLEP synth for ESP32 CYD
 
  v3 Features:
@@ -65,8 +65,9 @@ TouchState touch;
 AppMode    currentMode = MENU;
 
 // Audio output mode (referenced by synth_engine.h extern)
-// Default: PCM5052 external DAC.  Change via Synth → OUT button.
-AudioOutputMode audioOutputMode = AUDIO_PCM5052;
+// Default: SPEAKER (Internal DAC → SC8002B → P4 header).
+// Switch to PCM5052 via Synth → OUT button when using external DAC.
+AudioOutputMode audioOutputMode = AUDIO_SPEAKER;
 
 // SD card — onboard slot uses VSPI default pins (free from touch/display)
 // SD_CS=GPIO5  SD_SCK=GPIO18  SD_MISO=GPIO19  SD_MOSI=GPIO23
@@ -254,7 +255,7 @@ void drawMenu() {
   tft.drawRect(1, 1, 318, 60, THEME_OUTLINE);
   tft.drawRect(2, 2, 316, 58, THEME_OUTLINE);
   tft.setTextColor(THEME_PRIMARY, THEME_BG);
-  tft.drawCentreString("ZOMBIE SS", 160, 8, 4);
+  tft.drawCentreString("ZOMBI SS", 160, 8, 4);
   tft.setTextColor(THEME_ACCENT, THEME_BG);
   tft.drawCentreString("PROPHET SYNTHESIZER  v3", 160, 38, 2);
 
@@ -343,7 +344,7 @@ void sdEndAccess() {
 // ── Setup ──────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
-  Serial.println("ZOMBIE SS v3 — initializing");
+  Serial.println("ZOMBI SS v3 — initializing");
 
   // ── SD card FIRST (before VSPI is remapped for touch) ───────────────────
   // After this block, sdSPI.end() frees the VSPI for touch remapping.
@@ -370,7 +371,7 @@ void setup() {
 
   // Splash screen
   tft.setTextColor(THEME_PRIMARY, THEME_BG);
-  tft.drawCentreString("ZOMBIE SS", 160, 75, 4);
+  tft.drawCentreString("ZOMBI SS", 160, 75, 4);
   tft.setTextColor(THEME_ACCENT, THEME_BG);
   tft.drawCentreString("PROPHET SYNTHESIZER v3", 160, 112, 2);
   tft.setTextColor(THEME_TEXT_DIM, THEME_BG);

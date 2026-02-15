@@ -90,12 +90,12 @@ public:
 class DelayEffect {
 public:
   bool  enabled  = false;
-  float delayMs  = 375.0f;  // ms
+  float delayMs  = 250.0f;  // ms default
   float feedback = 0.45f;   // 0-0.9
   float mix      = 0.35f;   // wet/dry
 
 private:
-  static const int MAX_MS = 750;
+  static const int MAX_MS = 375;   // 375ms max saves ~66KB vs 750ms (was 132KB, now 66KB)
   static const int BUF_LEN = (SAMPLE_RATE_FX * MAX_MS / 1000 + 8);
 
   int16_t* bufL = nullptr;

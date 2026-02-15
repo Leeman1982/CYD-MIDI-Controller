@@ -112,7 +112,7 @@ void drawZombieHeader() {
   tft.drawRect(1, 1, 318, 48, THEME_OUTLINE);
 
   tft.setTextColor(THEME_PRIMARY, THEME_BG);
-  tft.drawCentreString("ZOMBIE SS", 160, 5, 4);
+  tft.drawCentreString("ZOMBI SS", 160, 5, 4);
   tft.setTextColor(THEME_ACCENT, THEME_BG);
   tft.drawCentreString("PROPHET SYNTHESIZER", 160, 33, 2);
 

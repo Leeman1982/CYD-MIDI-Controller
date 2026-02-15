@@ -80,7 +80,7 @@ void zombieChordDraw() {
   tft.drawRect(0, 0, 320, 50, THEME_OUTLINE);
   tft.drawRect(1, 1, 318, 48, THEME_OUTLINE);
   tft.setTextColor(THEME_PRIMARY, THEME_BG);
-  tft.drawString("ZOMBIE SS", 95, 8, 6);
+  tft.drawString("ZOMBI SS", 95, 8, 6);
   tft.setTextColor(THEME_ACCENT, THEME_BG);
   tft.drawString("CHORD PAD", 95, 35, 2);
 
