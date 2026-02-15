@@ -185,9 +185,12 @@ struct Filter {
   }
 
   void updateCoefficients() {
-    f = 2.0f * sin(PI * cutoff);
+    // Linear f mapping avoids sin() on every UI/parameter change.
+    // Chamberlin SVF: f = 2*sin(PI*fc/fs) ≈ 2*fc for small fc, here we use
+    // the full range linearly.  Stability: enforce f < 1.9*q.
     q = 1.0f - resonance;
     q = constrain(q, 0.1f, 1.0f);
+    f = constrain(cutoff * 2.0f, 0.0f, 1.9f * q);
   }
 
   void setCutoff(float freq) {
@@ -335,6 +338,10 @@ struct Voice {
   float filterEnvAmt;     // 0-1 how much filter env modulates cutoff
   float baseCutoff;       // stored base cutoff so LFO can offset from it
 
+  // Pre-baked oscillator base frequencies (recomputed in noteOn, not per-sample)
+  float baseFreq1;        // 440 * 2^((note-69)/12)
+  float baseFreq2;        // baseFreq1 * detuneRatio * 2^(semiOffset/12)
+
   Oscillator osc1;
   Oscillator osc2;
   Filter filter;
@@ -355,6 +362,8 @@ struct Voice {
     osc2SemiOffset  = 0.0f;
     filterEnvAmt    = 0.3f;
     baseCutoff      = 0.8f;
+    baseFreq1       = 440.0f;
+    baseFreq2       = 440.0f * 1.005f;
 
     osc1.init(WAVE_SAW);
     osc2.init(WAVE_SAW);
@@ -369,10 +378,11 @@ struct Voice {
     active = true;
     noteOnTime = millis();
 
-    float freq = 440.0f * powf(2.0f, (n - 69) / 12.0f);
-    float freq2 = freq * osc2DetuneRatio * powf(2.0f, osc2SemiOffset / 12.0f);
-    osc1.setFrequency(freq);
-    osc2.setFrequency(freq2);
+    // Compute base frequencies once per note-on (not per sample)
+    baseFreq1 = 440.0f * powf(2.0f, (n - 69) / 12.0f);
+    baseFreq2 = baseFreq1 * osc2DetuneRatio * powf(2.0f, osc2SemiOffset / 12.0f);
+    osc1.setFrequency(baseFreq1);
+    osc2.setFrequency(baseFreq2);
     osc1.phase = 0.0f;
     osc2.phase = 0.0f;
 
@@ -389,25 +399,25 @@ struct Voice {
   float process() {
     if (!active) return 0.0f;
 
-    // Apply pitch bend + LFO pitch to oscillator frequencies
-    float freq = 440.0f * powf(2.0f, (note - 69) / 12.0f);
-    float freq2 = freq * osc2DetuneRatio * powf(2.0f, osc2SemiOffset / 12.0f);
-    osc1.setFrequency(freq * pitchBendRatio * lfoPitchMod);
-    osc2.setFrequency(freq2 * pitchBendRatio * lfoPitchMod);
+    // Use pre-baked base frequencies — only fast multiplications per sample.
+    // pitchBendRatio and lfoPitchMod are updated by their respective setters.
+    float mod = pitchBendRatio * lfoPitchMod;
+    osc1.setFrequency(baseFreq1 * mod);
+    osc2.setFrequency(baseFreq2 * mod);
 
     float osc1Out = osc1.process();
     float osc2Out = osc2.process();
     float oscMix = (osc1Out + osc2Out) * 0.5f;
 
-    // Filter cutoff: base + env + LFO + aftertouch
+    // Filter modulation: modulate pre-computed f directly — no trig per sample.
+    // filter.f was computed in setCutoff() (from UI/preset, not per-sample).
+    // Envelope, LFO, and aftertouch add an offset to f in filter coefficient space.
     float filterEnvValue = filterEnv.process();
-    float modCutoff = baseCutoff
-                    + filterEnvValue * filterEnvAmt
-                    + lfoFilterMod
-                    + aftertouchMod * 0.2f;
-    filter.setCutoff(constrain(modCutoff, 0.0f, 1.0f));
-
+    float savedF = filter.f;
+    float fMod = (filterEnvValue * filterEnvAmt + lfoFilterMod + aftertouchMod * 0.2f) * 2.0f;
+    filter.f = constrain(filter.f + fMod, 0.0f, 1.9f * filter.q);
     float filtered = filter.process(oscMix);
+    filter.f = savedF;  // restore so base cutoff isn't shifted by modulation
 
     float ampEnvValue = ampEnv.process();
     float ampScale = 1.0f - lfoAmpMod * 0.5f; // lfoAmpMod 0-1 → tremolo
@@ -456,11 +466,18 @@ private:
     return oldest;
   }
 
-  // Propagate patch-level params to all voices
+  // Propagate patch-level params to all voices and rebake baseFreq2
+  // so any in-flight voices immediately use the new detune/semitone values.
   void applyOsc2ToVoices() {
+    float detuneRatio = 1.0f + osc2Detune;
+    float semiMult    = powf(2.0f, osc2Semitones / 12.0f); // once, not per voice
     for (int i = 0; i < MAX_VOICES; i++) {
-      voices[i].osc2DetuneRatio = 1.0f + osc2Detune;
+      voices[i].osc2DetuneRatio = detuneRatio;
       voices[i].osc2SemiOffset  = osc2Semitones;
+      // Rebake baseFreq2 so process() sees the change immediately
+      if (voices[i].active) {
+        voices[i].baseFreq2 = voices[i].baseFreq1 * detuneRatio * semiMult;
+      }
     }
   }
 
@@ -551,8 +568,13 @@ public:
     applyOsc2ToVoices();
   }
 
-  // Call after changing audioOutputMode to switch DAC route
+  // Call after changing audioOutputMode to switch DAC route.
+  // Must suspend the audio task first — i2s_driver_uninstall() from Core 1
+  // while Core 0 is inside i2s_write() corrupts the driver and causes glitches.
   void reinitOutput() {
+    extern TaskHandle_t audioTaskHandle;
+    if (audioTaskHandle) vTaskSuspend(audioTaskHandle);
+
     i2s_driver_uninstall(I2S_NUM);
 
     if (audioOutputMode == AUDIO_PCM5052) {
@@ -603,6 +625,8 @@ public:
       i2s_set_clk(I2S_NUM, SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
       Serial.printf("Audio: Internal DAC on GPIO%d (SC8002B amp)\n", I2S_DAC_GPIO);
     }
+
+    if (audioTaskHandle) vTaskResume(audioTaskHandle);
   }
 
   void noteOn(int note, int velocity) {

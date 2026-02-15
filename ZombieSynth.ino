@@ -213,7 +213,9 @@ void audioTask(void* parameter) {
   while (true) {
     SynthEngine* synth = getZombieSynth();
     if (synth) synth->processAudio();
-    vTaskDelay(1);
+    // No vTaskDelay — i2s_write(portMAX_DELAY) blocks until the DMA ring
+    // buffer has room, providing natural backpressure at exactly 44100 Hz.
+    // Adding any delay here risks DMA underruns and audio glitches.
   }
 }
 
