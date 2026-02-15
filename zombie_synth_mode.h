@@ -66,7 +66,7 @@ void zombieSynthInit() {
   synthParams.osc2Semitones = 0;
 
   synthParams.filterType = FILTER_LOWPASS;
-  synthParams.filterCutoff = 0.8f;
+  synthParams.filterCutoff = 0.5f;   // 0.5 → f=1.0 (mid-range, safely stable)
   synthParams.filterResonance = 0.3f;
   synthParams.filterEnvAmount = 0.5f;
 
@@ -89,6 +89,7 @@ void zombieSynthInit() {
   zombieSynth->setFilterType((FilterType)synthParams.filterType);
   zombieSynth->setFilterCutoff(synthParams.filterCutoff);
   zombieSynth->setFilterResonance(synthParams.filterResonance);
+  zombieSynth->setFilterEnvAmount(synthParams.filterEnvAmount);
   zombieSynth->setAmpEnvelope(synthParams.ampAttack, synthParams.ampDecay,
                                synthParams.ampSustain, synthParams.ampRelease);
   zombieSynth->setFilterEnvelope(synthParams.filterAttack, synthParams.filterDecay,
@@ -272,63 +273,140 @@ void zombieSynthDraw() {
   }
 }
 
-void zombieSynthHandleTouch() {
-  if (!touch.justPressed) return;
+// Read a slider value (0.0-1.0) from current touch position.
+// Returns -1 if touch is outside the slider's track area.
+float readSliderValue(int x, int y, int w, int h) {
+  int trackY = y + 25;
+  int trackH = h - 50;
+  if (!isButtonPressed(x, y, w, h)) return -1.0f;
+  float val = 1.0f - (float)(touch.y - trackY) / (float)trackH;
+  return constrain(val, 0.0f, 1.0f);
+}
 
-  // Check page tabs
-  for (int i = 0; i < 4; i++) {
-    int x = 20 + i * 70;
-    if (isButtonPressed(x, 55, 60, 20)) {
-      synthParams.currentPage = i;
-      return;
+void zombieSynthHandleTouch() {
+  // Tab buttons need justPressed to avoid repeated switching
+  if (touch.justPressed) {
+    for (int i = 0; i < 4; i++) {
+      int x = 20 + i * 70;
+      if (isButtonPressed(x, 55, 60, 20)) {
+        synthParams.currentPage = i;
+        return;
+      }
     }
   }
 
-  // Page-specific touch handling
-  switch (synthParams.currentPage) {
-    case 0: { // OSC page
-      // OSC1 wave buttons
-      if (isButtonPressed(85, 145, 50, 30)) {
-        synthParams.osc1Wave = (synthParams.osc1Wave - 1 + 5) % 5;
-        zombieSynth->setOsc1Waveform((WaveformType)synthParams.osc1Wave);
-      }
-      if (isButtonPressed(85, 180, 50, 30)) {
-        synthParams.osc1Wave = (synthParams.osc1Wave + 1) % 5;
-        zombieSynth->setOsc1Waveform((WaveformType)synthParams.osc1Wave);
-      }
+  // Use isPressed (continuous) for sliders so user can drag them
+  if (!touch.isPressed) return;
 
-      // OSC2 wave buttons
-      if (isButtonPressed(225, 145, 50, 30)) {
-        synthParams.osc2Wave = (synthParams.osc2Wave - 1 + 5) % 5;
-        zombieSynth->setOsc2Waveform((WaveformType)synthParams.osc2Wave);
+  float sliderVal;
+
+  switch (synthParams.currentPage) {
+    case 0: { // OSC page — wave buttons (justPressed only) + level sliders
+      if (touch.justPressed) {
+        if (isButtonPressed(85, 145, 50, 30)) {
+          synthParams.osc1Wave = (synthParams.osc1Wave - 1 + 5) % 5;
+          zombieSynth->setOsc1Waveform((WaveformType)synthParams.osc1Wave);
+        }
+        if (isButtonPressed(85, 180, 50, 30)) {
+          synthParams.osc1Wave = (synthParams.osc1Wave + 1) % 5;
+          zombieSynth->setOsc1Waveform((WaveformType)synthParams.osc1Wave);
+        }
+        if (isButtonPressed(225, 145, 50, 30)) {
+          synthParams.osc2Wave = (synthParams.osc2Wave - 1 + 5) % 5;
+          zombieSynth->setOsc2Waveform((WaveformType)synthParams.osc2Wave);
+        }
+        if (isButtonPressed(225, 180, 50, 30)) {
+          synthParams.osc2Wave = (synthParams.osc2Wave + 1) % 5;
+          zombieSynth->setOsc2Waveform((WaveformType)synthParams.osc2Wave);
+        }
       }
-      if (isButtonPressed(225, 180, 50, 30)) {
-        synthParams.osc2Wave = (synthParams.osc2Wave + 1) % 5;
-        zombieSynth->setOsc2Waveform((WaveformType)synthParams.osc2Wave);
+      // OSC1 level slider
+      sliderVal = readSliderValue(10, 100, 70, 140);
+      if (sliderVal >= 0.0f) { synthParams.osc1Level = sliderVal; }
+      // Master volume slider
+      sliderVal = readSliderValue(245, 100, 65, 140);
+      if (sliderVal >= 0.0f) {
+        synthParams.masterVolume = sliderVal;
+        zombieSynth->setMasterVolume(sliderVal);
       }
       break;
     }
 
     case 1: { // Filter page
-      // Filter type buttons
-      if (isButtonPressed(240, 145, 35, 30)) {
-        synthParams.filterType = (synthParams.filterType - 1 + 4) % 4;
-        zombieSynth->setFilterType((FilterType)synthParams.filterType);
+      if (touch.justPressed) {
+        if (isButtonPressed(240, 145, 35, 30)) {
+          synthParams.filterType = (synthParams.filterType - 1 + 4) % 4;
+          zombieSynth->setFilterType((FilterType)synthParams.filterType);
+        }
+        if (isButtonPressed(275, 145, 35, 30)) {
+          synthParams.filterType = (synthParams.filterType + 1) % 4;
+          zombieSynth->setFilterType((FilterType)synthParams.filterType);
+        }
       }
-      if (isButtonPressed(275, 145, 35, 30)) {
-        synthParams.filterType = (synthParams.filterType + 1) % 4;
-        zombieSynth->setFilterType((FilterType)synthParams.filterType);
+      // Cutoff slider
+      sliderVal = readSliderValue(10, 100, 70, 140);
+      if (sliderVal >= 0.0f) {
+        synthParams.filterCutoff = sliderVal;
+        zombieSynth->setFilterCutoff(sliderVal);
       }
+      // Resonance slider
+      sliderVal = readSliderValue(85, 100, 70, 140);
+      if (sliderVal >= 0.0f) {
+        synthParams.filterResonance = sliderVal;
+        zombieSynth->setFilterResonance(sliderVal);
+      }
+      // Env amount slider
+      sliderVal = readSliderValue(160, 100, 70, 140);
+      if (sliderVal >= 0.0f) {
+        synthParams.filterEnvAmount = sliderVal;
+        zombieSynth->setFilterEnvAmount(sliderVal);
+      }
+      break;
+    }
+
+    case 2: { // Amp Envelope page
+      // Attack (displayed as ampAttack*2.0f so slider 0-1 = 0-0.5s)
+      sliderVal = readSliderValue(10, 100, 70, 140);
+      if (sliderVal >= 0.0f) { synthParams.ampAttack = sliderVal * 0.5f; }
+      // Decay (0-1s)
+      sliderVal = readSliderValue(85, 100, 70, 140);
+      if (sliderVal >= 0.0f) { synthParams.ampDecay = sliderVal; }
+      // Sustain (0-1)
+      sliderVal = readSliderValue(160, 100, 70, 140);
+      if (sliderVal >= 0.0f) { synthParams.ampSustain = sliderVal; }
+      // Release (0-1s)
+      sliderVal = readSliderValue(235, 100, 70, 140);
+      if (sliderVal >= 0.0f) { synthParams.ampRelease = sliderVal; }
+      // Apply amp envelope whenever any slider moved
+      zombieSynth->setAmpEnvelope(synthParams.ampAttack, synthParams.ampDecay,
+                                   synthParams.ampSustain, synthParams.ampRelease);
+      break;
+    }
+
+    case 3: { // Filter Envelope page
+      // Attack (0-0.5s)
+      sliderVal = readSliderValue(10, 100, 70, 140);
+      if (sliderVal >= 0.0f) { synthParams.filterAttack = sliderVal * 0.5f; }
+      // Decay (0-1s)
+      sliderVal = readSliderValue(85, 100, 70, 140);
+      if (sliderVal >= 0.0f) { synthParams.filterDecay = sliderVal; }
+      // Sustain (0-1)
+      sliderVal = readSliderValue(160, 100, 70, 140);
+      if (sliderVal >= 0.0f) { synthParams.filterSustain = sliderVal; }
+      // Release (0-1s)
+      sliderVal = readSliderValue(235, 100, 70, 140);
+      if (sliderVal >= 0.0f) { synthParams.filterRelease = sliderVal; }
+      zombieSynth->setFilterEnvelope(synthParams.filterAttack, synthParams.filterDecay,
+                                      synthParams.filterSustain, synthParams.filterRelease);
       break;
     }
   }
 }
 
 void zombieSynthUpdate() {
-  // Process audio in background (should be in separate task)
-  if (zombieSynth) {
-    zombieSynth->processAudio();
-  }
+  // Audio processing is handled by the Core 0 audio task (audioTask in ZombieSynth.ino).
+  // Do NOT call processAudio() here — that would cause a two-core race condition on
+  // voice state, envelope values, and the shared I2S audio buffer, producing distortion.
 }
 
 SynthEngine* getZombieSynth() {

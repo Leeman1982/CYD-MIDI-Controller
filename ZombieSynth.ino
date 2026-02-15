@@ -104,11 +104,10 @@ void audioTask(void* parameter) {
   while (true) {
     SynthEngine* synth = getZombieSynth();
     if (synth) {
-      synth->processAudio();
+      synth->processAudio();  // i2s_write(portMAX_DELAY) provides natural backpressure
     }
-
-    // Small delay to prevent watchdog timeout
-    vTaskDelay(1);
+    // No vTaskDelay here — adding any delay risks DMA underruns.
+    // i2s_write with portMAX_DELAY blocks until DMA has room, self-pacing the loop.
   }
 }
 

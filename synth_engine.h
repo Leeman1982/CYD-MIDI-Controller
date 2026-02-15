@@ -153,9 +153,13 @@ struct Filter {
   }
 
   void updateCoefficients() {
-    f = 2.0f * sin(PI * cutoff);
+    // Linear f mapping: monotonic, no transcendental function needed.
+    // Chamberlin SVF stability requires f < 2*q.  We enforce that here with a
+    // 5% margin so high resonance + high cutoff doesn't blow up the filter.
     q = 1.0f - resonance;
     q = constrain(q, 0.1f, 1.0f);
+    float maxF = 1.9f * q;   // 0.95 × (2*q) safety margin
+    f = constrain(cutoff * 2.0f, 0.0f, maxF);
   }
 
   void setCutoff(float freq) {
@@ -267,16 +271,18 @@ struct Voice {
   Filter filter;
   Envelope ampEnv;
   Envelope filterEnv;
+  float filterEnvAmt;  // How much filterEnv opens the filter (0-1 range, mapped to f units)
 
   void init() {
     note = -1;
     velocity = 0;
     active = false;
     noteOnTime = 0;
+    filterEnvAmt = 0.5f;
 
     osc1.init(WAVE_SAW);
     osc2.init(WAVE_SAW);
-    filter.init(FILTER_LOWPASS, 0.8f, 0.3f);
+    filter.init(FILTER_LOWPASS, 0.5f, 0.3f);  // 0.5 = mid-range start (f=1.0)
     ampEnv.init(0.01f, 0.3f, 0.7f, 0.5f);
     filterEnv.init(0.01f, 0.3f, 0.5f, 0.3f);
   }
@@ -310,13 +316,15 @@ struct Voice {
     float osc2Out = osc2.process();
     float oscMix = (osc1Out + osc2Out) * 0.5f;
 
-    // Apply filter envelope to cutoff
+    // Apply filter envelope: modulate f directly (no per-sample sin/trig call).
+    // filter.f is pre-computed from setCutoff(); envelope adds on top.
     float filterEnvValue = filterEnv.process();
-    float modCutoff = filter.cutoff + (filterEnvValue * 0.3f);
-    filter.setCutoff(modCutoff);
+    float savedF = filter.f;
+    filter.f = constrain(filter.f + filterEnvValue * filterEnvAmt, 0.0f, 1.9f * filter.q);
 
     // Process through filter
     float filtered = filter.process(oscMix);
+    filter.f = savedF;  // restore so UI-set cutoff isn't drifted by envelope
 
     // Apply amplitude envelope
     float ampEnvValue = ampEnv.process();
@@ -471,6 +479,12 @@ public:
   void setFilterType(FilterType type) {
     for (int i = 0; i < MAX_VOICES; i++) {
       voices[i].filter.type = type;
+    }
+  }
+
+  void setFilterEnvAmount(float amt) {
+    for (int i = 0; i < MAX_VOICES; i++) {
+      voices[i].filterEnvAmt = constrain(amt, 0.0f, 1.9f);
     }
   }
 
