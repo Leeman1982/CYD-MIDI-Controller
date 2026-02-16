@@ -6,6 +6,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 //
 // Complete graphical UI for 128×64 SH1106 OLED with 16-button 4×4 matrix.
+// Uses Adafruit_SH110X + Adafruit_GFX libraries.
 //
 // Button layout:
 //   [BACK ] [ UP  ] [PGUP ] [PLAY ]     Row 1
@@ -37,7 +38,8 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #include <Arduino.h>
-#include <U8g2lib.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SH110X.h>
 #include <Wire.h>
 #include "config.h"
 #include "button_input.h"
@@ -58,17 +60,8 @@ extern void            loadPresetToSynth(int slot);
 extern void            saveCurrentToPreset(int slot);
 
 // ── OLED Display Object ─────────────────────────────────────────────────────
-// Select driver at compile time via OLED_DRIVER in config.h
-// SH1106 = most 1.3" OLEDs, SSD1306 = most 0.96" OLEDs / some 1.3" clones
-#if OLED_DRIVER == 2
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE,
-                                           /* clock=*/ OLED_SCL_PIN,
-                                           /* data=*/  OLED_SDA_PIN);
-#else
-U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE,
-                                          /* clock=*/ OLED_SCL_PIN,
-                                          /* data=*/  OLED_SDA_PIN);
-#endif
+// Adafruit_SH1106G for 1.3" 128×64 SH1106 OLED (I2C)
+Adafruit_SH1106G display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 
 // ── UI Constants ────────────────────────────────────────────────────────────
 #define SCREEN_W      128
@@ -149,6 +142,18 @@ static int presetSelectedSlot = 0;
 
 // ── Drawing Helpers ─────────────────────────────────────────────────────────
 
+// Text helper: draw string at (x, yBaseline) matching U8g2 coordinate system.
+// Adafruit GFX default font: 6×8 px, cursor is top-left. Baseline offset = 7.
+static void drawText(int16_t x, int16_t yBaseline, const char* text) {
+  display.setCursor(x, yBaseline - 7);
+  display.print(text);
+}
+
+// Width of string in pixels (default font: 6 px per character at textSize 1)
+static int textWidth(const char* text) {
+  return (int)strlen(text) * 6;
+}
+
 static void uiClampScroll() {
   if (uiCursor < 0) uiCursor = 0;
   if (uiCursor >= uiItemCount) uiCursor = uiItemCount - 1;
@@ -165,48 +170,47 @@ static void uiResetCursor() {
 
 // Draw inverse header bar (top 10px)
 static void drawHeader(const char* title) {
-  u8g2.setDrawColor(1);
-  u8g2.drawBox(0, 0, SCREEN_W, HEADER_H);
-  u8g2.setDrawColor(0);
-  u8g2.setFont(u8g2_font_5x7_tr);
-  u8g2.drawStr(2, 8, title);
+  display.fillRect(0, 0, SCREEN_W, HEADER_H, SH110X_WHITE);
+  display.setTextSize(1);
+  display.setTextColor(SH110X_BLACK);
+  drawText(2, 8, title);
 
   // Show last played note (top-right)
   if (lastPlayedMidiNote >= 0) {
     char nb[6];
     snprintf(nb, sizeof(nb), "%s%d", midiNoteName(lastPlayedMidiNote), midiNoteOctave(lastPlayedMidiNote));
-    int w = u8g2.getStrWidth(nb);
-    u8g2.drawStr(SCREEN_W - w - 2, 8, nb);
+    int w = textWidth(nb);
+    drawText(SCREEN_W - w - 2, 8, nb);
   }
-  u8g2.setDrawColor(1);
+  display.setTextColor(SH110X_WHITE);
 }
 
 // Draw Q1-Q4 context labels at the bottom (4 zones, 32px each)
 static void drawFooter(const char* q1, const char* q2, const char* q3, const char* q4) {
   const char* labels[4] = {q1, q2, q3, q4};
-  u8g2.setFont(u8g2_font_5x7_tr);
+  display.setTextSize(1);
   int footerY = SCREEN_H - FOOTER_H;
 
   // Thin separator line
-  u8g2.drawHLine(0, footerY, SCREEN_W);
+  display.drawFastHLine(0, footerY, SCREEN_W, SH110X_WHITE);
 
   for (int i = 0; i < 4; i++) {
     int x = i * 32;
-    int tw = u8g2.getStrWidth(labels[i]);
+    int tw = textWidth(labels[i]);
     int cx = x + (32 - tw) / 2;
-    u8g2.drawStr(cx, SCREEN_H - 2, labels[i]);
+    drawText(cx, SCREEN_H - 2, labels[i]);
 
     // Vertical separator between zones (except after last)
-    if (i < 3) u8g2.drawVLine(x + 32, footerY + 1, FOOTER_H - 1);
+    if (i < 3) display.drawFastVLine(x + 32, footerY + 1, FOOTER_H - 1, SH110X_WHITE);
   }
 }
 
 // Draw a horizontal bar graph
 static void drawBar(int x, int y, int w, int h, float value) {
   value = constrain(value, 0.0f, 1.0f);
-  u8g2.drawFrame(x, y, w, h);
+  display.drawRect(x, y, w, h, SH110X_WHITE);
   int fill = (int)(value * (w - 2));
-  if (fill > 0) u8g2.drawBox(x + 1, y + 1, fill, h - 2);
+  if (fill > 0) display.fillRect(x + 1, y + 1, fill, h - 2, SH110X_WHITE);
 }
 
 // Draw a parameter row: label + bar + value text
@@ -216,11 +220,12 @@ static void drawParamRow(int screenRow, const char* label, float barVal, const c
 
   if (selected) {
     // Highlight cursor indicator
-    u8g2.drawTriangle(0, y + 1, 4, y + 4, 0, y + 7);
+    display.fillTriangle(0, y + 1, 4, y + 4, 0, y + 7, SH110X_WHITE);
   }
 
-  u8g2.setFont(u8g2_font_5x7_tr);
-  u8g2.drawStr(6, y + 7, label);
+  display.setTextSize(1);
+  display.setTextColor(SH110X_WHITE);
+  drawText(6, y + 7, label);
 
   // Bar graph (only if barVal >= 0)
   if (barVal >= 0.0f) {
@@ -228,8 +233,8 @@ static void drawParamRow(int screenRow, const char* label, float barVal, const c
   }
 
   // Right-aligned value text
-  int vw = u8g2.getStrWidth(valText);
-  u8g2.drawStr(SCREEN_W - vw - 1, y + 7, valText);
+  int vw = textWidth(valText);
+  drawText(SCREEN_W - vw - 1, y + 7, valText);
 }
 
 // Draw a parameter row without bar (for text/enum values)
@@ -237,14 +242,25 @@ static void drawTextRow(int screenRow, const char* label, const char* valText, b
   int y = PARAM_Y_START + screenRow * PARAM_ROW_H;
 
   if (selected) {
-    u8g2.drawTriangle(0, y + 1, 4, y + 4, 0, y + 7);
+    display.fillTriangle(0, y + 1, 4, y + 4, 0, y + 7, SH110X_WHITE);
   }
 
-  u8g2.setFont(u8g2_font_5x7_tr);
-  u8g2.drawStr(6, y + 7, label);
+  display.setTextSize(1);
+  display.setTextColor(SH110X_WHITE);
+  drawText(6, y + 7, label);
 
-  int vw = u8g2.getStrWidth(valText);
-  u8g2.drawStr(SCREEN_W - vw - 1, y + 7, valText);
+  int vw = textWidth(valText);
+  drawText(SCREEN_W - vw - 1, y + 7, valText);
+}
+
+// Draw scroll indicators (up/down arrows)
+static void drawScrollIndicators() {
+  if (uiItemCount > MAX_VISIBLE) {
+    display.setTextSize(1);
+    display.setTextColor(SH110X_WHITE);
+    if (uiScrollTop > 0) drawText(122, PARAM_Y_START + 7, "^");
+    if (uiScrollTop + MAX_VISIBLE < uiItemCount) drawText(122, PARAM_Y_START + MAX_VISIBLE * PARAM_ROW_H - 3, "v");
+  }
 }
 
 // ── Value Adjustment Helpers ────────────────────────────────────────────────
@@ -289,7 +305,7 @@ static bool handleUpDown() {
 // MAIN MENU
 // ═════════════════════════════════════════════════════════════════════════════
 static void drawMenuMode() {
-  u8g2.clearBuffer();
+  display.clearDisplay();
   drawHeader("ZOMBIE SS PROPHET");
 
   static const char* menuItems[] = {"SYNTH", "ARP", "SEQ", "PRESETS", "CHORDS"};
@@ -307,15 +323,9 @@ static void drawMenuMode() {
     drawTextRow(i, menuItems[idx], val, idx == uiCursor);
   }
 
-  // Scroll indicator
-  if (uiItemCount > MAX_VISIBLE) {
-    u8g2.setFont(u8g2_font_5x7_tr);
-    if (uiScrollTop > 0) u8g2.drawStr(120, PARAM_Y_START + 7, "^");
-    if (uiScrollTop + MAX_VISIBLE < uiItemCount) u8g2.drawStr(120, PARAM_Y_START + MAX_VISIBLE * PARAM_ROW_H - 3, "v");
-  }
-
+  drawScrollIndicators();
   drawFooter("SYNTH", "ARP", "SEQ", "PRE");
-  u8g2.sendBuffer();
+  display.display();
 }
 
 static void handleMenuInput() {
@@ -343,7 +353,7 @@ static void handleMenuInput() {
 // SYNTH MODE – 8 parameter pages with bar graphs
 // ═════════════════════════════════════════════════════════════════════════════
 static void drawSynthMode() {
-  u8g2.clearBuffer();
+  display.clearDisplay();
 
   char hdr[22];
   snprintf(hdr, sizeof(hdr), "SYNTH:%s", synthPageNames[uiSubPage]);
@@ -528,15 +538,11 @@ static void drawSynthMode() {
   }
 
   // Scroll indicators if needed
-  if (uiItemCount > MAX_VISIBLE) {
-    u8g2.setFont(u8g2_font_5x7_tr);
-    if (uiScrollTop > 0) u8g2.drawStr(122, PARAM_Y_START + 7, "^");
-    if (uiScrollTop + MAX_VISIBLE < uiItemCount) u8g2.drawStr(122, PARAM_Y_START + MAX_VISIBLE * PARAM_ROW_H - 3, "v");
-  }
+  drawScrollIndicators();
 
   // Footer: Q1-Q4 switch between synth sub-page groups
   drawFooter("OSC", "FLT", "ENV", "FX");
-  u8g2.sendBuffer();
+  display.display();
 }
 
 static void handleSynthInput() {
@@ -679,7 +685,7 @@ static void handleSynthInput() {
 // ARP MODE
 // ═════════════════════════════════════════════════════════════════════════════
 static void drawArpMode() {
-  u8g2.clearBuffer();
+  display.clearDisplay();
 
   char hdr[22];
   snprintf(hdr, sizeof(hdr), "ARP %s %dBPM",
@@ -708,20 +714,17 @@ static void drawArpMode() {
   }
 
   // Scroll indicators
-  if (uiItemCount > MAX_VISIBLE) {
-    u8g2.setFont(u8g2_font_5x7_tr);
-    if (uiScrollTop > 0) u8g2.drawStr(122, PARAM_Y_START + 7, "^");
-    if (uiScrollTop + MAX_VISIBLE < uiItemCount) u8g2.drawStr(122, PARAM_Y_START + MAX_VISIBLE * PARAM_ROW_H - 3, "v");
-  }
+  drawScrollIndicators();
 
   // Show note count in the area above the footer
-  u8g2.setFont(u8g2_font_5x7_tr);
+  display.setTextSize(1);
+  display.setTextColor(SH110X_WHITE);
   char nc[12];
   snprintf(nc, sizeof(nc), "Notes:%d", arp.getNoteCount());
-  u8g2.drawStr(2, 52, nc);
+  drawText(2, 52, nc);
 
   drawFooter("PLAY", "PATT", "BPM", "GATE");
-  u8g2.sendBuffer();
+  display.display();
 }
 
 static void handleArpInput() {
@@ -799,7 +802,8 @@ static void drawSeqGrid() {
   int gridY = 13;
 
   // 16 steps: 7px wide + 1px gap = 8px each = 128px total
-  u8g2.setFont(u8g2_font_5x7_tr);
+  display.setTextSize(1);
+  display.setTextColor(SH110X_WHITE);
   for (int s = 0; s < MAX_SEQ_STEPS; s++) {
     int x = s * 8;
     bool active = trk->steps[s].active;
@@ -808,22 +812,20 @@ static void drawSeqGrid() {
 
     if (isCurrent) {
       // Playing step: filled box with hollow center if active
-      u8g2.drawBox(x, gridY, 7, 9);
+      display.fillRect(x, gridY, 7, 9, SH110X_WHITE);
       if (active) {
-        u8g2.setDrawColor(0);
-        u8g2.drawBox(x + 1, gridY + 1, 5, 7);
-        u8g2.setDrawColor(1);
+        display.fillRect(x + 1, gridY + 1, 5, 7, SH110X_BLACK);
       }
     } else if (active) {
-      u8g2.drawBox(x, gridY, 7, 9);
+      display.fillRect(x, gridY, 7, 9, SH110X_WHITE);
     } else {
-      u8g2.drawFrame(x, gridY, 7, 9);
+      display.drawRect(x, gridY, 7, 9, SH110X_WHITE);
     }
 
     if (isCursor) {
       // Cursor: outer frame
-      if (x > 0) u8g2.drawFrame(x - 1, gridY - 1, 9, 11);
-      else u8g2.drawFrame(x, gridY - 1, 8, 11);
+      if (x > 0) display.drawRect(x - 1, gridY - 1, 9, 11, SH110X_WHITE);
+      else display.drawRect(x, gridY - 1, 8, 11, SH110X_WHITE);
     }
   }
 
@@ -841,7 +843,7 @@ static void drawSeqGrid() {
   } else {
     snprintf(info, sizeof(info), "S%d --- (off)", seqStepCursor + 1);
   }
-  u8g2.drawStr(0, infoY + 7, info);
+  drawText(0, infoY + 7, info);
 
   // Line 2: Probability + tie
   if (st.active) {
@@ -852,11 +854,11 @@ static void drawSeqGrid() {
     snprintf(info, sizeof(info), "Trk:%d/%d Len:%d",
       seq.getActiveTrack() + 1, MAX_SEQ_TRACKS, trk->trackLength);
   }
-  u8g2.drawStr(0, infoY + 16, info);
+  drawText(0, infoY + 16, info);
 }
 
 static void drawSeqMode() {
-  u8g2.clearBuffer();
+  display.clearDisplay();
 
   char hdr[22];
   snprintf(hdr, sizeof(hdr), "SEQ T%d %s %dBPM",
@@ -932,11 +934,7 @@ static void drawSeqMode() {
         }
       }
 
-      if (uiItemCount > MAX_VISIBLE) {
-        u8g2.setFont(u8g2_font_5x7_tr);
-        if (uiScrollTop > 0) u8g2.drawStr(122, PARAM_Y_START + 7, "^");
-        if (uiScrollTop + MAX_VISIBLE < uiItemCount) u8g2.drawStr(122, PARAM_Y_START + MAX_VISIBLE * PARAM_ROW_H - 3, "v");
-      }
+      drawScrollIndicators();
       drawFooter("CLR", "RND", "COPY", "MUTE");
       break;
     }
@@ -963,11 +961,7 @@ static void drawSeqMode() {
         }
       }
 
-      if (uiItemCount > MAX_VISIBLE) {
-        u8g2.setFont(u8g2_font_5x7_tr);
-        if (uiScrollTop > 0) u8g2.drawStr(122, PARAM_Y_START + 7, "^");
-        if (uiScrollTop + MAX_VISIBLE < uiItemCount) u8g2.drawStr(122, PARAM_Y_START + MAX_VISIBLE * PARAM_ROW_H - 3, "v");
-      }
+      drawScrollIndicators();
       drawFooter("KEY", "SCAL", "LOCK", "BPM");
       break;
     }
@@ -975,7 +969,7 @@ static void drawSeqMode() {
     default: break;
   }
 
-  u8g2.sendBuffer();
+  display.display();
 }
 
 static void handleSeqInput() {
@@ -1163,7 +1157,7 @@ static void chordStopAll() {
 }
 
 static void drawChordMode() {
-  u8g2.clearBuffer();
+  display.clearDisplay();
 
   char hdr[22];
   snprintf(hdr, sizeof(hdr), "CHORD %s %s Oct%d",
@@ -1191,14 +1185,9 @@ static void drawChordMode() {
     }
   }
 
-  if (uiItemCount > MAX_VISIBLE) {
-    u8g2.setFont(u8g2_font_5x7_tr);
-    if (uiScrollTop > 0) u8g2.drawStr(122, PARAM_Y_START + 7, "^");
-    if (uiScrollTop + MAX_VISIBLE < uiItemCount) u8g2.drawStr(122, PARAM_Y_START + MAX_VISIBLE * PARAM_ROW_H - 3, "v");
-  }
-
+  drawScrollIndicators();
   drawFooter("ROOT", "TYPE", "OCT", "HOLD");
-  u8g2.sendBuffer();
+  display.display();
 }
 
 static void handleChordInput() {
@@ -1235,7 +1224,7 @@ static void handleChordInput() {
 // PRESETS MODE
 // ═════════════════════════════════════════════════════════════════════════════
 static void drawPresetsMode() {
-  u8g2.clearBuffer();
+  display.clearDisplay();
 
   char hdr[22];
   snprintf(hdr, sizeof(hdr), "PRESET %c%d",
@@ -1255,21 +1244,18 @@ static void drawPresetsMode() {
   }
 
   // Scroll indicators
-  if (uiItemCount > MAX_VISIBLE) {
-    u8g2.setFont(u8g2_font_5x7_tr);
-    if (uiScrollTop > 0) u8g2.drawStr(122, PARAM_Y_START + 7, "^");
-    if (uiScrollTop + MAX_VISIBLE < uiItemCount) u8g2.drawStr(122, PARAM_Y_START + MAX_VISIBLE * PARAM_ROW_H - 3, "v");
-  }
+  drawScrollIndicators();
 
   // Show preset info in the area above footer
-  u8g2.setFont(u8g2_font_5x7_tr);
+  display.setTextSize(1);
+  display.setTextColor(SH110X_WHITE);
   if (uiCursor < NUM_FACTORY)
-    u8g2.drawStr(2, 52, "[OK]Load");
+    drawText(2, 52, "[OK]Load");
   else
-    u8g2.drawStr(2, 52, "[OK]Load [FN+OK]Save");
+    drawText(2, 52, "[OK]Load [FN+OK]Save");
 
   drawFooter("LOAD", "SAVE", "FACT", "USER");
-  u8g2.sendBuffer();
+  display.display();
 }
 
 static void handlePresetsInput() {
@@ -1349,28 +1335,30 @@ void uiInit() {
   // Scan the bus so the user can verify the OLED is detected
   i2cScan();
 
-  // ── U8g2 init ─────────────────────────────────────────────────────────
-  // The constructor already has the correct SCL/SDA pins baked in,
-  // so u8g2.begin() will re-use the Wire instance we configured above.
-  u8g2.setI2CAddress(OLED_ADDR * 2);   // U8g2 wants the 8-bit address
-  u8g2.begin();
-  u8g2.setContrast(200);
-
-#if OLED_DRIVER == 2
-  Serial.println("OLED driver: SSD1306 128x64");
-#else
-  Serial.println("OLED driver: SH1106  128x64");
-#endif
+  // ── Adafruit SH1106 init ──────────────────────────────────────────────
+  if (!display.begin(OLED_ADDR, true)) {
+    Serial.println("** SH1106 init FAILED — check wiring/address! **");
+  } else {
+    Serial.println("OLED: Adafruit_SH1106G 128x64 OK");
+  }
   Serial.printf("OLED addr : 0x%02X  SDA=%d SCL=%d\n", OLED_ADDR, OLED_SDA_PIN, OLED_SCL_PIN);
 
+  display.setContrast(200);
+  display.setTextColor(SH110X_WHITE);
+  display.setTextSize(1);
+  display.setTextWrap(false);
+
   // ── Splash screen ─────────────────────────────────────────────────────
-  u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_helvB10_tr);
-  u8g2.drawStr(14, 20, "ZOMBIE SS");
-  u8g2.setFont(u8g2_font_5x7_tr);
-  u8g2.drawStr(12, 35, "PROPHET SYNTHESIZER");
-  u8g2.drawStr(28, 48, "RP2040 Edition");
-  u8g2.sendBuffer();
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setCursor(10, 4);
+  display.print("ZOMBIE SS");
+  display.setTextSize(1);
+  display.setCursor(12, 28);
+  display.print("PROPHET SYNTHESIZER");
+  display.setCursor(28, 41);
+  display.print("RP2040 Edition");
+  display.display();
   delay(1500);
 
   uiResetCursor();
