@@ -124,6 +124,21 @@ struct MidiEvent {
   uint8_t data1;
   uint8_t data2;
   uint8_t data3;
+
+  // Explicit volatile-qualified operators required because compiler-generated
+  // copy/move operators don't handle volatile qualifiers (GCC -fpermissive error).
+  MidiEvent() : type(0), data1(0), data2(0), data3(0) {}
+  MidiEvent(uint8_t t, uint8_t d1, uint8_t d2, uint8_t d3)
+    : type(t), data1(d1), data2(d2), data3(d3) {}
+
+  // Assign from volatile source (used in mqPop: queue → local copy)
+  MidiEvent& operator=(const volatile MidiEvent& o) {
+    type  = o.type;
+    data1 = o.data1;
+    data2 = o.data2;
+    data3 = o.data3;
+    return *this;
+  }
 };
 
 #define EVENT_NOTE_ON      1

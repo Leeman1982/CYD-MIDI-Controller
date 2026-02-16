@@ -71,7 +71,11 @@ volatile uint8_t   mqTail = 0;  // Read by Core 1
 static inline void mqPush(uint8_t type, uint8_t d1, uint8_t d2, uint8_t d3 = 0) {
   uint8_t next = (mqHead + 1) & MIDI_QUEUE_MASK;
   if (next != mqTail) {  // Not full
-    midiQueue[mqHead] = {type, d1, d2, d3};
+    // Write fields individually – brace-init on volatile is not allowed
+    midiQueue[mqHead].type  = type;
+    midiQueue[mqHead].data1 = d1;
+    midiQueue[mqHead].data2 = d2;
+    midiQueue[mqHead].data3 = d3;
     __dmb();  // Memory barrier
     mqHead = next;
   }
