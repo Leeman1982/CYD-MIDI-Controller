@@ -5,7 +5,7 @@
  Hardware:
    - RP2040 dual-core Cortex-M0+ @ 250 MHz (overclocked)
    - 1.3" SH1106 128×64 OLED (I2C on GPIO 4/5)
-   - 8-button input (GPIO 6-13)
+   - 4×4 matrix keypad (16 buttons, rows GPIO 6-9, cols GPIO 10-13)
    - PCM5102A I2S DAC (GPIO 20=DIN, 21=BCLK, 22=LRCLK)
    - MIDI IN/OUT (GPIO 0=TX, 1=RX, UART0 @ 31250 baud)
 
@@ -23,7 +23,7 @@
    - Chord pad (8 types × 12 roots)
    - 10 factory + 10 user presets (LittleFS persistent)
    - Full MIDI CC mapping
-   - Menu-driven OLED UI with 8-button navigation
+   - Graphical OLED UI with 16-button 4×4 matrix navigation
  *******************************************************************/
 
 #include <Arduino.h>

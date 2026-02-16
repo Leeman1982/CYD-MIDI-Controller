@@ -7,32 +7,30 @@
 //
 // Target: Raspberry Pi Pico / RP2040 (dual-core Cortex-M0+ @ 250MHz)
 // Display: 1.3" SH1106 128×64 OLED (I2C)
-// Input: 8-button matrix/direct GPIO
+// Input: 4×4 key matrix (16 buttons)
 // Audio: PCM5102A I2S DAC
 // MIDI: 5-pin DIN via UART
 //
-// Core 0: UI rendering, touch/button input, MIDI processing
+// Core 0: UI rendering, button input, MIDI processing
 // Core 1: Audio synthesis, I2S output
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #include <Arduino.h>
 
 // ── System Clock ─────────────────────────────────────────────────────────────
-// Overclock to 250 MHz for adequate software-float DSP performance.
-// The RP2040 M0+ has no FPU — all float ops are emulated.
 #define RP2040_CLOCK_MHZ 250
 
 // ── Audio Settings ───────────────────────────────────────────────────────────
 #define SAMPLE_RATE     44100
-#define BUFFER_SIZE     128       // Samples per I2S write (smaller = lower latency)
-#define MAX_VOICES      6         // Reduced from 8 (no FPU on M0+)
+#define BUFFER_SIZE     128
+#define MAX_VOICES      6
 #define TWO_PI_F        6.28318530718f
 #define MIDI_NOTE_COUNT 128
 
 // ── I2S Audio Pins (PCM5102A DAC) ────────────────────────────────────────────
 #define I2S_DATA_PIN    20        // DIN  → PCM5102A
 #define I2S_BCLK_PIN    21        // BCLK → PCM5102A
-// LRCLK is auto-assigned to BCLK+1 = GPIO 22 by arduino-pico I2S library
+// LRCLK auto-assigned to BCLK+1 = GPIO 22
 
 // ── MIDI Pins ────────────────────────────────────────────────────────────────
 #define MIDI_RX_PIN     1         // MIDI IN  (UART0 RX / Serial1)
@@ -44,55 +42,90 @@
 #define OLED_SCL_PIN    5
 #define OLED_WIDTH      128
 #define OLED_HEIGHT     64
-#define OLED_ADDR       0x3C      // Common I2C address for SH1106/SSD1306
+#define OLED_ADDR       0x3C
 
-// ── Button Pins (Active LOW with internal pull-up) ──────────────────────────
-// Directly wired buttons or button matrix output to GPIO.
-// Active LOW: pressed = LOW, released = HIGH (INPUT_PULLUP)
+// ── 4×4 Key Matrix ─────────────────────────────────────────────────────────
+// Module pinout: R4 R3 R2 R1 | C4 C3 C2 C1 | SDA SCL VCC GND
 //
-// Layout assumes a module with joystick + 3 function keys:
-//   Joystick: UP / DOWN / LEFT / RIGHT / CENTER(press)
-//   Keys:     A (BACK) / B (FUNCTION) / C (PLAY/STOP)
+// Scanning: Rows are driven LOW one at a time (outputs).
+//           Columns are read (inputs with pull-up). LOW = pressed.
 //
-// Change these to match your specific OLED button matrix module.
-#define BTN_UP_PIN      6
-#define BTN_DOWN_PIN    7
-#define BTN_LEFT_PIN    8
-#define BTN_RIGHT_PIN   9
-#define BTN_CENTER_PIN  10        // SELECT / ENTER
-#define BTN_A_PIN       11        // BACK / EXIT
-#define BTN_B_PIN       12        // FUNCTION / SHIFT
-#define BTN_C_PIN       13        // PLAY / STOP
+// Physical layout:
+//   [R1C1] [R1C2] [R1C3] [R1C4]
+//   [R2C1] [R2C2] [R2C3] [R2C4]
+//   [R3C1] [R3C2] [R3C3] [R3C4]
+//   [R4C1] [R4C2] [R4C3] [R4C4]
+//
+// Functional mapping:
+//   [BACK ] [ UP  ] [PGUP ] [PLAY ]     Row 1
+//   [LEFT ] [ OK  ] [RIGHT] [ FN  ]     Row 2
+//   [DOWN ] [PGDN ] [ −   ] [ +   ]     Row 3
+//   [ Q1  ] [ Q2  ] [ Q3  ] [ Q4  ]     Row 4 (context)
+//
+// Q1-Q4 change function based on mode:
+//   MENU:    SYNTH / ARP / SEQ / PRE
+//   SYNTH:   OSC / FLT / ENV / FX
+//   SEQ:     T1 / T2 / T3 / T4
+//   ARP:     (pattern group shortcuts)
+//   CHORD:   ROOT / TYPE / OCT / HOLD
+//   PRESETS: LOAD / SAVE / FACT / USER
 
-#define NUM_BUTTONS     8
-#define BTN_DEBOUNCE_MS 30        // Debounce time (ms)
-#define BTN_REPEAT_MS   400       // Initial key repeat delay
-#define BTN_REPEAT_FAST 80        // Fast repeat interval
+#define MATRIX_ROWS     4
+#define MATRIX_COLS     4
+#define NUM_BUTTONS     16
 
-// ── Button indices ──────────────────────────────────────────────────────────
-#define BTN_UP      0
-#define BTN_DOWN    1
-#define BTN_LEFT    2
-#define BTN_RIGHT   3
-#define BTN_CENTER  4
-#define BTN_A       5
-#define BTN_B       6
-#define BTN_C       7
+// Row pins (active-LOW outputs during scan)
+#define ROW1_PIN        6
+#define ROW2_PIN        7
+#define ROW3_PIN        8
+#define ROW4_PIN        9
+
+// Column pins (inputs with pull-up, read during scan)
+#define COL1_PIN        10
+#define COL2_PIN        11
+#define COL3_PIN        12
+#define COL4_PIN        13
+
+#define BTN_DEBOUNCE_MS 30
+#define BTN_REPEAT_MS   400
+#define BTN_REPEAT_FAST 80
+
+// ── Button indices (row * 4 + col) ──────────────────────────────────────────
+// Row 1: Navigation + Transport
+#define BTN_BACK    0   // R1C1 — Go back / exit mode
+#define BTN_UP      1   // R1C2 — Navigate up / cursor up
+#define BTN_PGUP    2   // R1C3 — Page up / previous page
+#define BTN_PLAY    3   // R1C4 — Play/Stop (arp/seq)
+
+// Row 2: Selection
+#define BTN_LEFT    4   // R2C1 — Cycle option left
+#define BTN_OK      5   // R2C2 — Select / Enter / Toggle
+#define BTN_RIGHT   6   // R2C3 — Cycle option right
+#define BTN_FN      7   // R2C4 — Function/Shift (hold for fine adjust)
+
+// Row 3: Value adjustment
+#define BTN_DOWN    8   // R3C1 — Navigate down / cursor down
+#define BTN_PGDN    9   // R3C2 — Page down / next page
+#define BTN_MINUS   10  // R3C3 — Decrease value
+#define BTN_PLUS    11  // R3C4 — Increase value
+
+// Row 4: Context-sensitive quick buttons
+#define BTN_Q1      12  // R4C1 — Context button 1
+#define BTN_Q2      13  // R4C2 — Context button 2
+#define BTN_Q3      14  // R4C3 — Context button 3
+#define BTN_Q4      15  // R4C4 — Context button 4
 
 // ── Inter-core MIDI event queue ─────────────────────────────────────────────
-// Single-producer (Core 0) / single-consumer (Core 1) ring buffer.
-// No locking needed with power-of-2 size and separate head/tail.
-#define MIDI_QUEUE_SIZE 64        // Must be power of 2
+#define MIDI_QUEUE_SIZE 64
 #define MIDI_QUEUE_MASK (MIDI_QUEUE_SIZE - 1)
 
 struct MidiEvent {
-  uint8_t type;   // EVENT_NOTE_ON, EVENT_NOTE_OFF, EVENT_CC, etc.
-  uint8_t data1;  // note / CC number
-  uint8_t data2;  // velocity / CC value
-  uint8_t data3;  // extra (channel, etc.)
+  uint8_t type;
+  uint8_t data1;
+  uint8_t data2;
+  uint8_t data3;
 };
 
-// Event types for inter-core queue
 #define EVENT_NOTE_ON      1
 #define EVENT_NOTE_OFF     2
 #define EVENT_CC           3
@@ -103,58 +136,34 @@ struct MidiEvent {
 
 // ── Waveform types ──────────────────────────────────────────────────────────
 enum WaveformType {
-  WAVE_SAW,
-  WAVE_SQUARE,
-  WAVE_TRIANGLE,
-  WAVE_SINE,
-  WAVE_PULSE,
-  WAVE_NOISE,
-  WAVE_SUPERSAW
+  WAVE_SAW, WAVE_SQUARE, WAVE_TRIANGLE, WAVE_SINE,
+  WAVE_PULSE, WAVE_NOISE, WAVE_SUPERSAW
 };
-
 static const char* waveformNames[] = {"SAW","SQR","TRI","SIN","PUL","NOI","SUP"};
 
 // ── Filter types ────────────────────────────────────────────────────────────
 enum FilterType {
-  FILTER_LOWPASS,
-  FILTER_HIGHPASS,
-  FILTER_BANDPASS,
-  FILTER_NOTCH
+  FILTER_LOWPASS, FILTER_HIGHPASS, FILTER_BANDPASS, FILTER_NOTCH
 };
-
 static const char* filterTypeNames[] = {"LP","HP","BP","NOTCH"};
 
 // ── LFO enums ───────────────────────────────────────────────────────────────
 enum LFOWave   { LFO_SINE, LFO_TRIANGLE, LFO_SAW, LFO_SQUARE, LFO_RANDOM };
 enum LFOTarget {
-  LFO_TARGET_FILTER    = 0,
-  LFO_TARGET_PITCH     = 1,
-  LFO_TARGET_AMP       = 2,
-  LFO_TARGET_RESONANCE = 3,
-  LFO_TARGET_PW        = 4,
-  LFO_TARGET_DETUNE    = 5
+  LFO_TARGET_FILTER = 0, LFO_TARGET_PITCH = 1, LFO_TARGET_AMP = 2,
+  LFO_TARGET_RESONANCE = 3, LFO_TARGET_PW = 4, LFO_TARGET_DETUNE = 5
 };
-
 static const char* lfoWaveNames[]   = {"SINE","TRI","SAW","SQR","S&H"};
 static const char* lfoTargetNames[] = {"FLTR","PTCH","AMP","RESO","PW","DET"};
 
 // ── App modes ───────────────────────────────────────────────────────────────
 enum AppMode {
-  MODE_MENU,
-  MODE_SYNTH,
-  MODE_ARP,
-  MODE_SEQ,
-  MODE_PRESETS,
-  MODE_CHORD
+  MODE_MENU, MODE_SYNTH, MODE_ARP, MODE_SEQ, MODE_PRESETS, MODE_CHORD
 };
 
 // ── ADSR envelope state ─────────────────────────────────────────────────────
 enum EnvelopeState {
-  ENV_IDLE,
-  ENV_ATTACK,
-  ENV_DECAY,
-  ENV_SUSTAIN,
-  ENV_RELEASE
+  ENV_IDLE, ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE
 };
 
 // ── Note names ──────────────────────────────────────────────────────────────

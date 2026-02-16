@@ -2,79 +2,106 @@
 #define BUTTON_INPUT_H
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ZOMBIE SS – Button Input Handler (RP2040)
+// ZOMBIE SS – 4×4 Matrix Keypad Scanner (RP2040)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Supports 8 direct GPIO buttons with debounce and key repeat.
-// Active LOW with internal pull-ups.
+// Scans a 4×4 key matrix connected to the 1.3" OLED module.
+// Rows (R1-R4) are driven LOW one at a time as outputs.
+// Columns (C1-C4) are read as inputs with internal pull-ups.
+// A key press grounds the column through the row, reading LOW.
 //
-// Button events:
-//   justPressed  – true for one cycle when button first pressed
-//   justReleased – true for one cycle when button released
-//   isHeld       – true while button is held down
-//   isRepeating  – true at repeat interval while held
+// 16 buttons with debounce, edge detection, and auto-repeat.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #include <Arduino.h>
 #include "config.h"
 
 struct ButtonState {
-  bool     raw;           // Current raw reading (LOW = pressed)
-  bool     pressed;       // Debounced state
-  bool     justPressed;   // Edge: just went down
-  bool     justReleased;  // Edge: just came up
-  bool     isHeld;        // Held longer than repeat delay
-  bool     isRepeating;   // Currently in repeat mode
-  uint32_t pressTime;     // When the button was pressed (ms)
-  uint32_t lastRepeat;    // Last repeat event time
-  uint32_t lastChange;    // Last raw state change (for debounce)
+  bool     pressed;
+  bool     justPressed;
+  bool     justReleased;
+  bool     isHeld;
+  bool     isRepeating;
+  uint32_t pressTime;
+  uint32_t lastRepeat;
+  // Debounce
+  bool     rawState;
+  uint32_t lastChange;
 };
 
 class ButtonInput {
 private:
-  int pins[NUM_BUTTONS];
+  int rowPins[MATRIX_ROWS];
+  int colPins[MATRIX_COLS];
   ButtonState state[NUM_BUTTONS];
+
+  void scanMatrix(bool rawOut[NUM_BUTTONS]) {
+    for (int r = 0; r < MATRIX_ROWS; r++) {
+      // Drive this row LOW
+      pinMode(rowPins[r], OUTPUT);
+      digitalWrite(rowPins[r], LOW);
+
+      // Small settle time (important for reliable reads)
+      delayMicroseconds(5);
+
+      // Read columns
+      for (int c = 0; c < MATRIX_COLS; c++) {
+        int idx = r * MATRIX_COLS + c;
+        rawOut[idx] = (digitalRead(colPins[c]) == LOW);
+      }
+
+      // Release row (high-Z / input)
+      pinMode(rowPins[r], INPUT);
+    }
+  }
 
 public:
   void init() {
-    pins[BTN_UP]     = BTN_UP_PIN;
-    pins[BTN_DOWN]   = BTN_DOWN_PIN;
-    pins[BTN_LEFT]   = BTN_LEFT_PIN;
-    pins[BTN_RIGHT]  = BTN_RIGHT_PIN;
-    pins[BTN_CENTER] = BTN_CENTER_PIN;
-    pins[BTN_A]      = BTN_A_PIN;
-    pins[BTN_B]      = BTN_B_PIN;
-    pins[BTN_C]      = BTN_C_PIN;
+    rowPins[0] = ROW1_PIN;
+    rowPins[1] = ROW2_PIN;
+    rowPins[2] = ROW3_PIN;
+    rowPins[3] = ROW4_PIN;
 
-    for (int i = 0; i < NUM_BUTTONS; i++) {
-      pinMode(pins[i], INPUT_PULLUP);
-      memset(&state[i], 0, sizeof(ButtonState));
+    colPins[0] = COL1_PIN;
+    colPins[1] = COL2_PIN;
+    colPins[2] = COL3_PIN;
+    colPins[3] = COL4_PIN;
+
+    // Rows start as inputs (high-Z, not driving)
+    for (int r = 0; r < MATRIX_ROWS; r++) {
+      pinMode(rowPins[r], INPUT);
     }
+
+    // Columns are inputs with pull-ups (idle HIGH)
+    for (int c = 0; c < MATRIX_COLS; c++) {
+      pinMode(colPins[c], INPUT_PULLUP);
+    }
+
+    memset(state, 0, sizeof(state));
   }
 
   void update() {
     uint32_t now = millis();
+    bool raw[NUM_BUTTONS];
+    scanMatrix(raw);
 
     for (int i = 0; i < NUM_BUTTONS; i++) {
-      bool rawNow = (digitalRead(pins[i]) == LOW);
-
       // Clear single-frame events
       state[i].justPressed  = false;
       state[i].justReleased = false;
       state[i].isRepeating  = false;
 
       // Debounce
-      if (rawNow != state[i].raw) {
-        state[i].raw = rawNow;
+      if (raw[i] != state[i].rawState) {
+        state[i].rawState   = raw[i];
         state[i].lastChange = now;
       }
 
       if (now - state[i].lastChange >= BTN_DEBOUNCE_MS) {
         bool wasPressed = state[i].pressed;
-        state[i].pressed = state[i].raw;
+        state[i].pressed = state[i].rawState;
 
         if (state[i].pressed && !wasPressed) {
-          // Just pressed
           state[i].justPressed = true;
           state[i].pressTime   = now;
           state[i].lastRepeat  = now;
@@ -82,20 +109,16 @@ public:
         }
 
         if (!state[i].pressed && wasPressed) {
-          // Just released
           state[i].justReleased = true;
           state[i].isHeld       = false;
         }
 
-        // Key repeat logic
+        // Auto-repeat
         if (state[i].pressed) {
           uint32_t heldTime = now - state[i].pressTime;
-
           if (heldTime >= BTN_REPEAT_MS) {
             state[i].isHeld = true;
-            uint32_t repeatInterval = BTN_REPEAT_FAST;
-
-            if (now - state[i].lastRepeat >= repeatInterval) {
+            if (now - state[i].lastRepeat >= BTN_REPEAT_FAST) {
               state[i].isRepeating = true;
               state[i].lastRepeat  = now;
             }
@@ -106,13 +129,13 @@ public:
   }
 
   // ── Accessors ─────────────────────────────────────────────────────────────
-  bool pressed(int btn)      { return (btn >= 0 && btn < NUM_BUTTONS) ? state[btn].justPressed : false; }
-  bool released(int btn)     { return (btn >= 0 && btn < NUM_BUTTONS) ? state[btn].justReleased : false; }
-  bool held(int btn)         { return (btn >= 0 && btn < NUM_BUTTONS) ? state[btn].isHeld : false; }
-  bool repeating(int btn)    { return (btn >= 0 && btn < NUM_BUTTONS) ? state[btn].isRepeating : false; }
-  bool isDown(int btn)       { return (btn >= 0 && btn < NUM_BUTTONS) ? state[btn].pressed : false; }
+  bool pressed(int btn)       { return (btn >= 0 && btn < NUM_BUTTONS) ? state[btn].justPressed : false; }
+  bool released(int btn)      { return (btn >= 0 && btn < NUM_BUTTONS) ? state[btn].justReleased : false; }
+  bool held(int btn)          { return (btn >= 0 && btn < NUM_BUTTONS) ? state[btn].isHeld : false; }
+  bool repeating(int btn)     { return (btn >= 0 && btn < NUM_BUTTONS) ? state[btn].isRepeating : false; }
+  bool isDown(int btn)        { return (btn >= 0 && btn < NUM_BUTTONS) ? state[btn].pressed : false; }
 
-  // Convenience: returns true on press OR repeat (for value adjustment)
+  // True on initial press OR auto-repeat (for value adjustment buttons)
   bool pressOrRepeat(int btn) {
     if (btn < 0 || btn >= NUM_BUTTONS) return false;
     return state[btn].justPressed || state[btn].isRepeating;
