@@ -38,11 +38,27 @@
 #define MIDI_BAUD       31250
 
 // ── OLED Display (I2C) ──────────────────────────────────────────────────────
+// 1.3" OLED 128×64, I2C bus
+//
+// Driver: Most 1.3" OLEDs use SH1106. Some use SSD1306.
+// If the screen is blank after flashing, change OLED_DRIVER below.
+//   1 = SH1106  (most common for 1.3" OLED — default)
+//   2 = SSD1306 (common for 0.96" OLED, some 1.3" clones)
+//
+// Address: Most modules are 0x3C. Some use 0x3D.
+// If unsure, check Serial output at boot — the I2C scanner will
+// print every device it finds.
+//
+#ifndef OLED_DRIVER
+#define OLED_DRIVER     1         // 1=SH1106, 2=SSD1306
+#endif
+
 #define OLED_SDA_PIN    4
 #define OLED_SCL_PIN    5
 #define OLED_WIDTH      128
 #define OLED_HEIGHT     64
 #define OLED_ADDR       0x3C
+#define OLED_I2C_FREQ   400000    // 400 kHz (Fast-mode I2C)
 
 // ── 4×4 Key Matrix ─────────────────────────────────────────────────────────
 // Module pinout: R4 R3 R2 R1 | C4 C3 C2 C1 | SDA SCL VCC GND

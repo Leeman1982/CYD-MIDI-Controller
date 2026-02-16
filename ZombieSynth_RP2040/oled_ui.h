@@ -58,7 +58,17 @@ extern void            loadPresetToSynth(int slot);
 extern void            saveCurrentToPreset(int slot);
 
 // ── OLED Display Object ─────────────────────────────────────────────────────
-U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+// Select driver at compile time via OLED_DRIVER in config.h
+// SH1106 = most 1.3" OLEDs, SSD1306 = most 0.96" OLEDs / some 1.3" clones
+#if OLED_DRIVER == 2
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE,
+                                           /* clock=*/ OLED_SCL_PIN,
+                                           /* data=*/  OLED_SDA_PIN);
+#else
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE,
+                                          /* clock=*/ OLED_SCL_PIN,
+                                          /* data=*/  OLED_SDA_PIN);
+#endif
 
 // ── UI Constants ────────────────────────────────────────────────────────────
 #define SCREEN_W      128
@@ -1310,15 +1320,50 @@ static void handlePresetsInput() {
 // ═════════════════════════════════════════════════════════════════════════════
 // UI INIT / UPDATE / DISPATCH
 // ═════════════════════════════════════════════════════════════════════════════
+// I2C scanner – prints all detected devices on the bus via Serial.
+// Runs at boot so you can verify the OLED address (usually 0x3C).
+static void i2cScan() {
+  Serial.println("I2C scan:");
+  int found = 0;
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.printf("  0x%02X found\n", addr);
+      found++;
+    }
+  }
+  if (found == 0) {
+    Serial.println("  ** NO devices found — check SDA/SCL wiring! **");
+  } else {
+    Serial.printf("  %d device(s) on bus\n", found);
+  }
+}
+
 void uiInit() {
+  // ── I2C bus: configure pins FIRST, then begin ──────────────────────────
   Wire.setSDA(OLED_SDA_PIN);
   Wire.setSCL(OLED_SCL_PIN);
+  Wire.setClock(OLED_I2C_FREQ);
   Wire.begin();
 
+  // Scan the bus so the user can verify the OLED is detected
+  i2cScan();
+
+  // ── U8g2 init ─────────────────────────────────────────────────────────
+  // The constructor already has the correct SCL/SDA pins baked in,
+  // so u8g2.begin() will re-use the Wire instance we configured above.
+  u8g2.setI2CAddress(OLED_ADDR * 2);   // U8g2 wants the 8-bit address
   u8g2.begin();
   u8g2.setContrast(200);
 
-  // Splash screen
+#if OLED_DRIVER == 2
+  Serial.println("OLED driver: SSD1306 128x64");
+#else
+  Serial.println("OLED driver: SH1106  128x64");
+#endif
+  Serial.printf("OLED addr : 0x%02X  SDA=%d SCL=%d\n", OLED_ADDR, OLED_SDA_PIN, OLED_SCL_PIN);
+
+  // ── Splash screen ─────────────────────────────────────────────────────
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_helvB10_tr);
   u8g2.drawStr(14, 20, "ZOMBIE SS");

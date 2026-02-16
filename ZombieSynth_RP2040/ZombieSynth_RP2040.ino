@@ -348,7 +348,9 @@ void setup() {
   set_sys_clock_khz(RP2040_CLOCK_MHZ * 1000, true);
 
   Serial.begin(115200);
+  delay(500);  // Give Serial monitor time to connect
   Serial.println("ZOMBIE SS RP2040 – initializing");
+  Serial.println("Blank screen? Change OLED_DRIVER in config.h (1=SH1106, 2=SSD1306)");
 
   // Init MIDI (Serial1: UART0)
   midiInput.init();
