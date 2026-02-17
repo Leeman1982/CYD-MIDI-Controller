@@ -117,7 +117,7 @@ namespace OledUI {
   }
 
   // Draw centered text at y position
-  void drawCentered(const char* text, int y, const u8g2_font_t* font = FONT_MEDIUM) {
+  void drawCentered(const char* text, int y, const uint8_t* font = FONT_MEDIUM) {
     display.setFont(font);
     int w = display.getStrWidth(text);
     display.drawStr((128 - w) / 2, y, text);
