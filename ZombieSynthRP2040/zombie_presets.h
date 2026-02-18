@@ -12,7 +12,7 @@
 #define NUM_FACTORY     10
 #define PRESET_NAME_LEN 14
 
-#define EEPROM_MAGIC    0xZB55
+#define EEPROM_MAGIC    0x5A42  // "ZB" in hex
 #define EEPROM_SIZE     2048   // Reserve 2KB
 
 struct SynthPatch {

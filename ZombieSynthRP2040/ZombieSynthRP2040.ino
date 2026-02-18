@@ -60,6 +60,9 @@ InputHandler    inputHandler;
 
 I2S             i2sOut(OUTPUT);
 
+// Core synchronization — Core 1 waits for Core 0 to finish init
+volatile bool   core0InitDone = false;
+
 AppMode         currentMode = MODE_MENU;
 int             lastPlayedMidiNote = -1;
 bool            arpRunning = false;
@@ -179,14 +182,12 @@ void seqNoteOff(int trackIdx, int noteNum) {
 void drawMenu() {
   OledUI::clear();
 
-  // Title
-  display.setFont(FONT_LARGE);
-  OledUI::drawCentered("ZOMBI SS", 10, FONT_LARGE);
-  display.setFont(FONT_SMALL);
-  OledUI::drawCentered("PROPHET SYNTH v3", 20, FONT_SMALL);
+  // Title — y is baseline in U8g2, FONT_LARGE ascent ~10px
+  OledUI::drawCentered("ZOMBI SS", 12, FONT_LARGE);
+  OledUI::drawCentered("PROPHET SYNTH v3", 22, FONT_SMALL);
 
   // Separator
-  display.drawHLine(0, 22, 128);
+  display.drawHLine(0, 24, 128);
 
   // Menu list
   display.setFont(FONT_MEDIUM);
@@ -195,7 +196,7 @@ void drawMenu() {
 
   for (int i = 0; i < 4 && (i + menuScroll) < NUM_MENU_ITEMS; i++) {
     int idx = i + menuScroll;
-    int y = 24 + i * LINE_H;
+    int y = 26 + i * LINE_H;
 
     if (idx == menuSelected) {
       display.drawBox(0, y, 128, LINE_H);
@@ -244,10 +245,21 @@ bool handleMenuInput(InputEvent evt) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void setup() {
-  // USB serial for debug
+  // USB serial for debug — wait a moment for Serial Monitor to attach
   Serial.begin(115200);
+  delay(500);
+  Serial.println(F(""));
+  Serial.println(F("========================================"));
+  Serial.println(F("  ZOMBI SS PROPHET SYNTH v3 — RP2040"));
+  Serial.println(F("========================================"));
+
+  // OLED — init FIRST so we can show splash while rest initializes
+  Serial.println(F("[INIT] OLED display..."));
+  OledUI::init();
+  OledUI::drawSplash();
 
   // MIDI
+  Serial.println(F("[INIT] MIDI handler..."));
   midiHandler.init();
   midiHandler.setNoteOnCallback(onMIDINoteOn);
   midiHandler.setNoteOffCallback(onMIDINoteOff);
@@ -256,21 +268,20 @@ void setup() {
   midiHandler.setAftertouchCallback(onMIDIAftertouch);
 
   // Input (encoder + buttons)
+  Serial.println(F("[INIT] Input handler..."));
   inputHandler.init();
 
-  // OLED
-  OledUI::init();
-  OledUI::drawSplash();
-  delay(1500);
-
   // Synth engine (DSP init, effects alloc)
+  Serial.println(F("[INIT] Synth engine + effects..."));
   synthEngine.init();
 
   // Default synth params (load factory preset 0)
+  Serial.println(F("[INIT] Preset manager..."));
   presetMgr.init();
   UIPresets::applyPatch(factoryPresets[0]);
 
   // Sequencer callbacks
+  Serial.println(F("[INIT] Sequencer..."));
   sequencer.setCallbacks(seqNoteOn, seqNoteOff);
   sequencer.init();
 
@@ -280,6 +291,14 @@ void setup() {
 
   lastLFOTick = millis();
   lastUIRefresh = millis();
+
+  // Signal Core 1 that initialization is complete
+  core0InitDone = true;
+
+  Serial.println(F("[INIT] All systems ready. Entering main loop."));
+  Serial.print(F("[INIT] Free heap: "));
+  Serial.print(rp2040.getFreeHeap());
+  Serial.println(F(" bytes"));
 }
 
 void loop() {
@@ -372,6 +391,11 @@ void loop() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void setup1() {
+  // Wait for Core 0 to finish initializing synth engine and effects
+  while (!core0InitDone) {
+    delay(1);
+  }
+
   // Configure I2S for PCM5102 DAC
   i2sOut.setBCLK(I2S_BCK_PIN);
   i2sOut.setDATA(I2S_DATA_PIN);

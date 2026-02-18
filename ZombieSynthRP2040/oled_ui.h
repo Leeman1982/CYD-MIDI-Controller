@@ -6,32 +6,108 @@
 #include "config.h"
 
 // ── OLED Display Manager ──────────────────────────────────────────────────────
-// U8g2 full-buffer mode for 1.3" SH1106 128x64 I2C OLED.
-// Provides drawing helpers for consistent ZOMBI SS UI on small screen.
+// U8g2 full-buffer mode for 1.3" 128x64 I2C OLED.
+//
+// IMPORTANT: If your screen is blank, try changing these defines:
+//   1. OLED_DRIVER: 0 = SH1106 (most 1.3" OLEDs), 1 = SSD1306 (some 1.3" / most 0.96")
+//   2. OLED_I2C_ADDR: 0x3C (most common) or 0x3D (some modules)
+//
+// You can find your display's address by watching the Serial Monitor at
+// startup — the I2C scanner will print all detected devices.
 
-// Display object — SH1106 128x64 I2C, full buffer
-// Use U8G2_SSD1306_128X64 if your module has SSD1306 instead
-U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+#ifndef OLED_DRIVER
+  #define OLED_DRIVER 0      // 0 = SH1106, 1 = SSD1306
+#endif
+
+#ifndef OLED_I2C_ADDR
+  #define OLED_I2C_ADDR 0x3C // Try 0x3D if screen stays blank
+#endif
+
+// ── Create display object based on driver selection ───────────────────────────
+#if OLED_DRIVER == 1
+  U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+#else
+  U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+#endif
 
 // ── Layout Constants ──────────────────────────────────────────────────────────
-#define HEADER_H     10   // Title bar height
+#define HEADER_H     12   // Title bar height
 #define LINE_H       10   // Text line height (with 6x10 font)
-#define MAX_VISIBLE   5   // Visible parameter lines (rows 1-5)
+#define MAX_VISIBLE   5   // Visible parameter lines
 #define FONT_SMALL    u8g2_font_5x7_tr
 #define FONT_MEDIUM   u8g2_font_6x10_tr
 #define FONT_LARGE    u8g2_font_8x13B_tr
-#define FONT_ICON     u8g2_font_open_iconic_play_1x_t
 
 namespace OledUI {
 
+  // ── I2C bus scanner — prints all detected addresses to Serial ────────────
+  void scanI2C() {
+    Serial.println(F("[OLED] Scanning I2C bus..."));
+    int found = 0;
+    for (uint8_t addr = 1; addr < 127; addr++) {
+      Wire.beginTransmission(addr);
+      if (Wire.endTransmission() == 0) {
+        Serial.print(F("[OLED]   Found device at 0x"));
+        if (addr < 16) Serial.print('0');
+        Serial.println(addr, HEX);
+        found++;
+      }
+    }
+    if (found == 0) {
+      Serial.println(F("[OLED]   NO I2C devices found! Check wiring."));
+      Serial.print(F("[OLED]   SDA=GPIO "));
+      Serial.print(OLED_SDA_PIN);
+      Serial.print(F("  SCL=GPIO "));
+      Serial.println(OLED_SCL_PIN);
+    } else {
+      Serial.print(F("[OLED]   "));
+      Serial.print(found);
+      Serial.println(F(" device(s) found."));
+    }
+  }
+
   void init() {
+    Serial.println(F("[OLED] Initializing display..."));
+    Serial.print(F("[OLED]   Driver: "));
+    #if OLED_DRIVER == 1
+      Serial.println(F("SSD1306"));
+    #else
+      Serial.println(F("SH1106"));
+    #endif
+    Serial.print(F("[OLED]   I2C addr: 0x"));
+    Serial.println(OLED_I2C_ADDR, HEX);
+    Serial.print(F("[OLED]   SDA=GPIO "));
+    Serial.print(OLED_SDA_PIN);
+    Serial.print(F("  SCL=GPIO "));
+    Serial.println(OLED_SCL_PIN);
+
+    // Step 1: Configure Wire pins BEFORE begin (RP2040 requirement)
     Wire.setSDA(OLED_SDA_PIN);
     Wire.setSCL(OLED_SCL_PIN);
     Wire.begin();
+    Wire.setClock(400000);  // 400 kHz I2C Fast Mode
+
+    // Step 2: Give OLED time to power up
+    delay(150);
+
+    // Step 3: Scan I2C bus for diagnostics
+    scanI2C();
+
+    // Step 4: Set I2C address before begin()
+    display.setI2CAddress(OLED_I2C_ADDR * 2);  // U8g2 uses 8-bit address (7-bit << 1)
+
+    // Step 5: Initialize display
     display.begin();
-    display.setContrast(200);
+
+    // Step 6: Explicitly turn on display and set max contrast
+    display.setPowerSave(0);
+    display.setContrast(255);
+
+    // Step 7: Clear and send to verify communication
     display.clearBuffer();
     display.sendBuffer();
+
+    Serial.println(F("[OLED] Init complete."));
   }
 
   // ── Drawing Primitives ──────────────────────────────────────────────────
@@ -150,7 +226,6 @@ namespace OledUI {
   }
 
   // Draw sequencer step grid (16 steps, fits in 128px)
-  // Each step: 7px wide, 1px gap = 8px per step = 128px total
   void drawStepGrid(int y, int h, bool steps[16], int currentStep, bool playing) {
     for (int i = 0; i < 16; i++) {
       int x = i * 8;
@@ -159,23 +234,29 @@ namespace OledUI {
       } else {
         display.drawFrame(x, y, 7, h);
       }
-      // Playhead indicator
       if (playing && i == currentStep) {
         display.drawHLine(x, y + h + 1, 7);
       }
     }
   }
 
-  // Splash screen
+  // Splash screen with test pattern
   void drawSplash() {
+    Serial.println(F("[OLED] Drawing splash screen..."));
+
     clear();
-    display.setFont(FONT_LARGE);
-    drawCentered("ZOMBI SS", 28, FONT_LARGE);
-    display.setFont(FONT_MEDIUM);
-    drawCentered("PROPHET SYNTH v3", 42, FONT_MEDIUM);
-    display.setFont(FONT_SMALL);
-    drawCentered("RP2040 Dual-Core", 56, FONT_SMALL);
+
+    // Draw a border to verify display is working
+    display.drawFrame(0, 0, 128, 64);
+
+    // Title text
+    drawCentered("ZOMBI SS", 30, FONT_LARGE);
+    drawCentered("PROPHET SYNTH v3", 46, FONT_MEDIUM);
+    drawCentered("RP2040 Dual-Core", 60, FONT_SMALL);
+
     send();
+
+    Serial.println(F("[OLED] Splash sent to display."));
   }
 
   // Note name helper
