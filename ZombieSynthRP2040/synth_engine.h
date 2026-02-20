@@ -64,6 +64,14 @@ struct Envelope {
   }
 
   bool isActive() { return state != ENV_IDLE; }
+
+  // Update rates without resetting envelope state (safe for live parameter changes)
+  void setParams(float a, float d, float s, float r) {
+    attack = a; decay = d; sustain = s; release = r;
+    attackRate  = (attack  > 0.0f) ? (1.0f / (attack  * SAMPLE_RATE)) : 1.0f;
+    decayRate   = (decay   > 0.0f) ? ((1.0f - sustain) / (decay * SAMPLE_RATE)) : 1.0f;
+    releaseRate = (release > 0.0f) ? (sustain / (release * SAMPLE_RATE)) : 1.0f;
+  }
 };
 
 // ── State Variable Filter (Chamberlin) ────────────────────────────────────────
@@ -375,10 +383,13 @@ public:
   }
 
   void setAmpEnvelope(float a, float d, float s, float r) {
-    for (int i = 0; i < MAX_VOICES; i++) voices[i].ampEnv.init(a, d, s, r);
+    for (int i = 0; i < MAX_VOICES; i++) voices[i].ampEnv.setParams(a, d, s, r);
   }
   void setFilterEnvelope(float a, float d, float s, float r) {
-    for (int i = 0; i < MAX_VOICES; i++) voices[i].filterEnv.init(a, d, s, r);
+    for (int i = 0; i < MAX_VOICES; i++) voices[i].filterEnv.setParams(a, d, s, r);
+  }
+  void setFilterEnvAmount(float a) {
+    for (int i = 0; i < MAX_VOICES; i++) voices[i].filterEnvAmt = a;
   }
 
   void setMasterVolume(float v) { masterVolume = fclamp(v, 0.0f, 1.0f); }

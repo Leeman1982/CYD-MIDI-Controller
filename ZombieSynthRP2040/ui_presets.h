@@ -65,6 +65,7 @@ namespace UIPresets {
     synthEngine.setFilterType((FilterType)p.filterType);
     synthEngine.setFilterCutoff(p.filterCutoff);
     synthEngine.setFilterResonance(p.filterResonance);
+    synthEngine.setFilterEnvAmount(p.filterEnvAmount);
     synthEngine.setAmpEnvelope(p.ampAttack, p.ampDecay, p.ampSustain, p.ampRelease);
     synthEngine.setFilterEnvelope(p.filterAttack, p.filterDecay, p.filterSustain, p.filterRelease);
     synthEngine.setMasterVolume(p.masterVolume);

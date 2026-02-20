@@ -196,7 +196,7 @@ namespace UISynth {
         switch (idx) {
           case 0: synthParams.filterCutoff = val; synthEngine.setFilterCutoff(val); break;
           case 1: synthParams.filterResonance = val; synthEngine.setFilterResonance(val); break;
-          case 2: synthParams.filterEnvAmount = val; break;
+          case 2: synthParams.filterEnvAmount = val; synthEngine.setFilterEnvAmount(val); break;
           case 3: synthParams.filterType = (int)val; synthEngine.setFilterType((FilterType)(int)val); break;
         } break;
       case 2: // Amp Env
@@ -265,7 +265,9 @@ namespace UISynth {
           snprintf(buf, bufLen, "%d%%", (int)(val * 100));
         } break;
       case 2: case 3: // Envelopes
-        snprintf(buf, bufLen, "%.2fs", val); break;
+        if (idx == 2) snprintf(buf, bufLen, "%d%%", (int)(val * 100)); // Sustain is a level
+        else snprintf(buf, bufLen, "%.2fs", val);
+        break;
       case 4: // LFO
         if (idx == 0) snprintf(buf, bufLen, "%s", val > 0.5f ? "ON" : "OFF");
         else if (idx == 1) snprintf(buf, bufLen, "%s", lfoWaveNames[(int)val % NUM_LFO_WAVES]);

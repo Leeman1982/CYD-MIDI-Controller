@@ -24,7 +24,24 @@
 #define I2S_WS_PIN    21   // LRCK → PCM5102 LCK  (must be BCK+1 for PIO I2S)
 #define I2S_DATA_PIN  22   // DOUT → PCM5102 DIN
 
-// ── OLED Display (SH1106 128x64 I2C) ─────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// ■■■  OLED DISPLAY CONFIG — CHANGE THESE IF YOUR SCREEN IS BLANK!  ■■■
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// The built-in LED blinks 3x at startup to confirm code is running.
+// Open Serial Monitor at 115200 baud to see I2C scan results.
+//
+// OLED_DRIVER — set for your display chip:
+//   0 = SH1106  (most 1.3" OLEDs, e.g. EstarDyn blue/white)
+//   1 = SSD1306 (most 0.96" OLEDs, and some 1.3" OLEDs)
+//
+// OLED_I2C_ADDR — try 0x3D if 0x3C doesn't work
+//
+#define OLED_DRIVER     0         // << Change to 1 for SSD1306 / 0.96" OLED
+#define OLED_I2C_ADDR   0x3C      // << Change to 0x3D if still blank
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── OLED Pins (I2C0) ────────────────────────────────────────────────────────
 #define OLED_SDA_PIN  4    // I2C0 SDA
 #define OLED_SCL_PIN  5    // I2C0 SCL
 #define OLED_WIDTH    128

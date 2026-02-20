@@ -245,12 +245,24 @@ bool handleMenuInput(InputEvent evt) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void setup() {
+  // LED heartbeat — blink 3x to confirm code is running
+  pinMode(LED_BUILTIN, OUTPUT);
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(100);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(100);
+  }
+
   // USB serial for debug — wait a moment for Serial Monitor to attach
   Serial.begin(115200);
   delay(500);
   Serial.println(F(""));
   Serial.println(F("========================================"));
   Serial.println(F("  ZOMBI SS PROPHET SYNTH v3 — RP2040"));
+  Serial.println(F("========================================"));
+  Serial.println(F("  If OLED is blank, change OLED_DRIVER"));
+  Serial.println(F("  in config.h (0=SH1106, 1=SSD1306)"));
   Serial.println(F("========================================"));
 
   // OLED — init FIRST so we can show splash while rest initializes

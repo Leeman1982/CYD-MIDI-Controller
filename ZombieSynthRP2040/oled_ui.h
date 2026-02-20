@@ -6,24 +6,10 @@
 #include "config.h"
 
 // ── OLED Display Manager ──────────────────────────────────────────────────────
-// U8g2 full-buffer mode for 1.3" 128x64 I2C OLED.
-//
-// IMPORTANT: If your screen is blank, try changing these defines:
-//   1. OLED_DRIVER: 0 = SH1106 (most 1.3" OLEDs), 1 = SSD1306 (some 1.3" / most 0.96")
-//   2. OLED_I2C_ADDR: 0x3C (most common) or 0x3D (some modules)
-//
-// You can find your display's address by watching the Serial Monitor at
-// startup — the I2C scanner will print all detected devices.
+// U8g2 full-buffer mode for 128x64 I2C OLED (1.3" or 0.96").
+// Driver chip and I2C address are configured in config.h — look there first!
 
-#ifndef OLED_DRIVER
-  #define OLED_DRIVER 0      // 0 = SH1106, 1 = SSD1306
-#endif
-
-#ifndef OLED_I2C_ADDR
-  #define OLED_I2C_ADDR 0x3C // Try 0x3D if screen stays blank
-#endif
-
-// ── Create display object based on driver selection ───────────────────────────
+// ── Create display object based on OLED_DRIVER setting in config.h ──────────
 #if OLED_DRIVER == 1
   U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 #else
@@ -103,11 +89,15 @@ namespace OledUI {
     display.setPowerSave(0);
     display.setContrast(255);
 
-    // Step 7: Clear and send to verify communication
+    // Step 7: Full white test — if you see a white flash, display is working
+    display.clearBuffer();
+    display.drawBox(0, 0, 128, 64);
+    display.sendBuffer();
+    delay(300);
     display.clearBuffer();
     display.sendBuffer();
 
-    Serial.println(F("[OLED] Init complete."));
+    Serial.println(F("[OLED] Init complete — you should have seen a white flash."));
   }
 
   // ── Drawing Primitives ──────────────────────────────────────────────────
