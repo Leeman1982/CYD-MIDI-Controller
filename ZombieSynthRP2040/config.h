@@ -41,6 +41,9 @@
 #define OLED_I2C_ADDR   0x3C      // << Change to 0x3D if still blank
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ── Status LED ───────────────────────────────────────────────────────────────
+#define STATUS_LED_PIN 25   // GPIO 25 = onboard LED on standard Pico
+
 // ── OLED Pins (I2C0) ────────────────────────────────────────────────────────
 #define OLED_SDA_PIN  4    // I2C0 SDA
 #define OLED_SCL_PIN  5    // I2C0 SCL
