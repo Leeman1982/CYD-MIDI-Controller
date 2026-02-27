@@ -55,7 +55,7 @@
 #define XPT2046_CS   33
 
 // ── Global objects ─────────────────────────────────────────────────────────
-SPIClass touchSPI = SPIClass(VSPI);
+SPIClass mySpi = SPIClass(VSPI);
 XPT2046_Touchscreen ts(XPT2046_CS, XPT2046_IRQ);
 TFT_eSPI tft = TFT_eSPI();
 
@@ -331,13 +331,13 @@ void exitToMenu() {
 void sdBeginAccess() {
   // Pause audio, release touch VSPI, configure VSPI for SD
   if (audioTaskHandle) vTaskSuspend(audioTaskHandle);
-  touchSPI.end();
+  mySpi.end();
   sdSPI.begin(18, 19, 23, SD_CS_PIN);  // SCK MISO MOSI CS
 }
 void sdEndAccess() {
   // Release SD VSPI, restore touch VSPI, resume audio
   sdSPI.end();
-  touchSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
+  mySpi.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
   if (audioTaskHandle) vTaskResume(audioTaskHandle);
 }
 
@@ -359,19 +359,14 @@ void setup() {
   sdSPI.end();  // Free VSPI so touch can remap it below
 
   // ── Touch SPI (VSPI remapped to GPIO 25/39/32/33) ───────────────────────
-  touchSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
-  ts.begin(touchSPI);
+  mySpi.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
+  ts.begin(mySpi);
   ts.setRotation(1);
 
-  // Display initialization
+  // Display
   tft.init();
   tft.setRotation(1);
-  tft.invertDisplay(true);   // Required for most CYD boards
-
-  // CRITICAL: Enable backlight on GPIO 21
-  pinMode(21, OUTPUT);
-  digitalWrite(21, HIGH);
-
+  tft.invertDisplay(true);   // Required for ESP32-2432S028R colour fix
   tft.fillScreen(THEME_BG);
 
   // Splash screen
