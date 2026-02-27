@@ -363,12 +363,15 @@ void setup() {
   ts.begin(touchSPI);
   ts.setRotation(1);
 
-  // Display
+  // Display initialization
   tft.init();
   tft.setRotation(1);
-  // NOTE: Some CYD boards need invertDisplay(true) for correct colours.
-  // Uncomment the line below if colours look inverted (white/black swapped):
-  // tft.invertDisplay(true);
+  tft.invertDisplay(true);   // Required for most CYD boards
+
+  // CRITICAL: Enable backlight on GPIO 21
+  pinMode(21, OUTPUT);
+  digitalWrite(21, HIGH);
+
   tft.fillScreen(THEME_BG);
 
   // Splash screen
