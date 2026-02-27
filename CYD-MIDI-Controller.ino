@@ -25,7 +25,8 @@
 #include "ui_elements.h"
 #include "midi_utils.h"
 
-// Hardware setup
+// Hardware setup for ESP32-2432S024 (2.4" CYD)
+// Standard pinout for most 2.4" CYD variants
 #define XPT2046_IRQ 36
 #define XPT2046_MOSI 32
 #define XPT2046_MISO 39
@@ -33,7 +34,8 @@
 #define XPT2046_CS 33
 
 // Global objects
-SPIClass mySpi = SPIClass(VSPI);
+// Touch uses VSPI with custom pins (25, 32, 33, 39)
+SPIClass touchSPI = SPIClass(VSPI);
 XPT2046_Touchscreen ts(XPT2046_CS, XPT2046_IRQ);
 TFT_eSPI tft = TFT_eSPI();
 
@@ -106,11 +108,14 @@ class MIDICallbacks: public BLEServerCallbacks {
 
 void setup() {
   Serial.begin(115200);
-  
-  // Touch setup
-  mySpi.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
-  ts.begin(mySpi);
-  ts.setRotation(1);
+  Serial.println("\n\n=== CYD MIDI Controller Starting ===");
+
+  // Touch setup - Initialize VSPI with custom pins for XPT2046
+  Serial.println("Initializing touch screen...");
+  touchSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
+  ts.begin(touchSPI);
+  ts.setRotation(1); // Landscape orientation
+  Serial.println("Touch screen initialized");
   
   // Display setup
   tft.init();

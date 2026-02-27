@@ -35,7 +35,8 @@
 #define XPT2046_CS 33
 
 // Global objects
-SPIClass mySpi = SPIClass(VSPI);
+// Touch uses VSPI with custom pins (25, 32, 33, 39)
+SPIClass touchSPI = SPIClass(VSPI);
 XPT2046_Touchscreen ts(XPT2046_CS, XPT2046_IRQ);
 TFT_eSPI tft = TFT_eSPI();
 
@@ -234,13 +235,15 @@ void exitToMenu() {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("ZOMBIE SS Prophet Synthesizer");
+  Serial.println("ZOMBI SS Prophet Synthesizer");
   Serial.println("Initializing...");
 
-  // Initialize SPI for touch
-  mySpi.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
-  ts.begin(mySpi);
-  ts.setRotation(1);
+  // Initialize SPI for touch - VSPI with custom pins
+  Serial.println("Initializing touch screen...");
+  touchSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
+  ts.begin(touchSPI);
+  ts.setRotation(1); // Landscape mode
+  Serial.println("Touch screen initialized");
 
   // Initialize display
   tft.init();
